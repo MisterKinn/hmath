@@ -1,0 +1,66 @@
+1:"""
+2:Utility for executing user-provided automation snippets against Hancom Hangul.
+3:"""
+4:
+5:from __future__ import annotations
+6:
+7:import logging
+8:import textwrap
+9:import traceback
+10:from typing import Callable, Dict
+11:
+12:from backend.hwp.hwp_controller import HwpController
+13:
+14:logger = logging.getLogger(__name__)
+15:
+16:LogFn = Callable[[str], None]
+17:
+18:
+19:SAFE_BUILTINS: Dict[str, object] = {
+20:    "range": range,
+21:    "len": len,
+22:    "min": min,
+23:    "max": max,
+24:    "enumerate": enumerate,
+25:    "sum": sum,
+26:    "print": print,
+27:    "abs": abs,
+28:}
+29:
+30:
+31:class HwpScriptRunner:
+32:    """
+33:    Executes small Python snippets with access to the HwpController instance.
+34:    """
+35:
+36:    def __init__(self, controller: HwpController) -> None:
+37:        self._controller = controller
+38:
+39:    def run(self, script: str, log: LogFn | None = None) -> None:
+40:        log_fn = log or (lambda *_: None)
+41:        cleaned = textwrap.dedent(script).strip()
+42:        if not cleaned:
+43:            log_fn("ë¹??¤í¬ë¦½íŠ¸?¼ì„œ ?¤í–‰?˜ì? ?Šì•˜?µë‹ˆ??")
+44:            return
+45:
+46:        env: Dict[str, object] = {
+47:            "__builtins__": SAFE_BUILTINS,
+48:            "hwp": self._controller._ensure_connected(),  # pyhwpx.Hwp ê°ì²´
+49:            "controller": self._controller,
+50:            "insert_text": self._controller.insert_text,
+51:            "insert_paragraph": self._controller.insert_paragraph_break,
+52:            "insert_image": self._controller.insert_image,
+53:            "insert_equation": self._controller.insert_equation,
+54:        }
+55:
+56:        log_fn("?¤í¬ë¦½íŠ¸ ?¤í–‰ ?œì‘")
+57:        try:
+58:            exec(cleaned, env, {})
+59:        except Exception as exc:
+60:            tb = traceback.format_exc()
+61:            log_fn(tb)
+62:            logger.exception("Failed to run custom script: %s", exc)
+63:            raise
+64:        else:
+65:            log_fn("?¤í¬ë¦½íŠ¸ ?¤í–‰ ?„ë£Œ")
+66:

@@ -1,0 +1,241 @@
+1:"""
+2:Minimal inline HWP automation console.
+3:"""
+4:
+5:from __future__ import annotations
+6:
+7:from typing import Optional
+8:
+9:from PySide6.QtCore import Qt, Signal, QThread, QObject
+10:from PySide6.QtWidgets import (
+11:    QApplication,
+12:    QFrame,
+13:    QHBoxLayout,
+14:    QLabel,
+15:    QMainWindow,
+16:    QMessageBox,
+17:    QPushButton,
+18:    QTextEdit,
+19:    QVBoxLayout,
+20:    QWidget,
+21:)
+22:
+23:from backend.hwp.hwp_controller import HwpController, HwpControllerError
+24:from backend.hwp.script_runner import HwpScriptRunner
+25:
+26:DEFAULT_SCRIPT = """
+27:# ?�시: ?�재 커서 ?�치??문단 ?�입
+28:hwp.InsertText("Inline HWP AI?�서 ?�동 ?�력?�는 문장?�니??\\r\\n")
+29:# ??문단
+30:hwp.BreakPara()
+31:"""
+32:
+33:
+34:class ScriptWorker(QThread):
+35:    log_signal = Signal(str)
+36:    error_signal = Signal(str)
+37:    finished_signal = Signal()
+38:
+39:    def __init__(self, script: str, parent: QObject | None = None) -> None:
+40:        super().__init__(parent)
+41:        self._script = script
+42:
+43:    def run(self) -> None:  # type: ignore[override]
+44:        try:
+45:            controller = HwpController()
+46:            controller.connect()
+47:            runner = HwpScriptRunner(controller)
+48:            runner.run(self._script, self.log_signal.emit)
+49:            self.finished_signal.emit()
+50:        except HwpControllerError as exc:
+51:            self.error_signal.emit(f"HWP ?�결 ?�패: {exc}")
+52:        except Exception as exc:  # pragma: no cover
+53:            self.error_signal.emit(str(exc))
+54:
+55:
+56:class MainWindow(QMainWindow):
+57:    def __init__(self) -> None:
+58:        super().__init__()
+59:        self.setWindowTitle("Inline HWP Script Runner")
+60:        self.resize(520, 820)
+61:        self._worker: Optional[ScriptWorker] = None
+62:        self._build_ui()
+63:        self._apply_styles()
+64:
+65:    # ------------------------------------------------------------------ #
+66:    # UI construction
+67:    # ------------------------------------------------------------------ #
+68:    def _build_ui(self) -> None:
+69:        central = QWidget(self)
+70:        layout = QVBoxLayout(central)
+71:        layout.setContentsMargins(24, 24, 24, 24)
+72:        layout.setSpacing(16)
+73:
+74:        layout.addWidget(self._build_header())
+75:        layout.addWidget(self._build_editor())
+76:        layout.addWidget(self._build_actions())
+77:        layout.addWidget(self._build_log_panel(), 1)
+78:
+79:        self.setCentralWidget(central)
+80:
+81:    def _build_header(self) -> QWidget:
+82:        frame = QFrame()
+83:        lyt = QVBoxLayout(frame)
+84:        lyt.setSpacing(4)
+85:
+86:        title = QLabel("inline HWP AI ??Script Console")
+87:        title.setObjectName("app-title")
+88:        subtitle = QLabel("?��? 문서 ?�용 ?�이???�니?�을 ?�행?�세??")
+89:        subtitle.setObjectName("app-subtitle")
+90:
+91:        lyt.addWidget(title)
+92:        lyt.addWidget(subtitle)
+93:        return frame
+94:
+95:    def _build_editor(self) -> QWidget:
+96:        frame = QFrame()
+97:        frame.setObjectName("card")
+98:        lyt = QVBoxLayout(frame)
+99:        lyt.setContentsMargins(18, 18, 18, 18)
+100:        lyt.setSpacing(12)
+101:
+102:        label = QLabel("?��? ?�동??코드")
+103:        label.setObjectName("card-title")
+104:        self.script_edit = QTextEdit()
+105:        self.script_edit.setPlaceholderText("?? hwp.InsertText('?�녕?�세??)")
+106:        self.script_edit.setPlainText(DEFAULT_SCRIPT.strip())
+107:        self.script_edit.setMinimumHeight(300)
+108:
+109:        lyt.addWidget(label)
+110:        lyt.addWidget(self.script_edit)
+111:        return frame
+112:
+113:    def _build_actions(self) -> QWidget:
+114:        frame = QFrame()
+115:        frame.setObjectName("card")
+116:        lyt = QHBoxLayout(frame)
+117:        lyt.setContentsMargins(18, 18, 18, 18)
+118:        lyt.setSpacing(12)
+119:
+120:        self.run_button = QPushButton("?�행")
+121:        self.run_button.setObjectName("primary-action")
+122:        self.always_on_top_btn = QPushButton("??�� ?�에 고정")
+123:        self.always_on_top_btn.setCheckable(True)
+124:        self.always_on_top_btn.toggled.connect(self._toggle_always_on_top)
+125:
+126:        self.run_button.clicked.connect(self._handle_run_clicked)
+127:
+128:        lyt.addWidget(self.run_button, 1)
+129:        lyt.addWidget(self.always_on_top_btn)
+130:        return frame
+131:
+132:    def _build_log_panel(self) -> QWidget:
+133:        frame = QFrame()
+134:        frame.setObjectName("card")
+135:        lyt = QVBoxLayout(frame)
+136:        lyt.setContentsMargins(18, 18, 18, 18)
+137:        lyt.setSpacing(12)
+138:
+139:        label = QLabel("?�행 로그")
+140:        label.setObjectName("card-title")
+141:        self.log_output = QTextEdit()
+142:        self.log_output.setReadOnly(True)
+143:        self.log_output.setMinimumHeight(200)
+144:        self.log_output.setPlaceholderText("?�크립트 로그가 ?�기???�시?�니??")
+145:
+146:        lyt.addWidget(label)
+147:        lyt.addWidget(self.log_output)
+148:        return frame
+149:
+150:    # ------------------------------------------------------------------ #
+151:    # Styling
+152:    # ------------------------------------------------------------------ #
+153:    def _apply_styles(self) -> None:
+154:        self.setStyleSheet(
+155:            """
+156:            QWidget {
+157:                background-color: #f4f4fb;
+158:                color: #222;
+159:                font-family: 'Pretendard', 'Segoe UI', sans-serif;
+160:                font-size: 13px;
+161:            }
+162:            #card {
+163:                background-color: #fff;
+164:                border-radius: 16px;
+165:                border: 1px solid #e3e3f0;
+166:            }
+167:            #card-title {
+168:                font-weight: 600;
+169:                font-size: 14px;
+170:            }
+171:            #app-title {
+172:                font-size: 20px;
+173:                font-weight: 700;
+174:            }
+175:            #app-subtitle {
+176:                color: #6b6b75;
+177:            }
+178:            QTextEdit {
+179:                border: 1px solid #dcdceb;
+180:                border-radius: 12px;
+181:                padding: 10px;
+182:                background-color: white;
+183:            }
+184:            QPushButton {
+185:                border-radius: 12px;
+186:                padding: 10px 16px;
+187:                background-color: #f0f0f5;
+188:                border: 1px solid #dcdceb;
+189:            }
+190:            QPushButton#primary-action {
+191:                background-color: #2b72ff;
+192:                color: white;
+193:                border: none;
+194:            }
+195:            QPushButton#primary-action:disabled {
+196:                background-color: #b0c6ff;
+197:            }
+198:            """
+199:        )
+200:
+201:    # ------------------------------------------------------------------ #
+202:    # Handlers
+203:    # ------------------------------------------------------------------ #
+204:    def _handle_run_clicked(self) -> None:
+205:        if self._worker and self._worker.isRunning():
+206:            QMessageBox.information(self, "진행 �?, "?��? ?�크립트�??�행 중입?�다.")
+207:            return
+208:
+209:        script = self.script_edit.toPlainText()
+210:        self._worker = ScriptWorker(script, self)
+211:        self._worker.log_signal.connect(self._append_log)
+212:        self._worker.error_signal.connect(self._handle_error)
+213:        self._worker.finished_signal.connect(self._handle_finished)
+214:
+215:        self.run_button.setEnabled(False)
+216:        self._append_log("=== ?�행 ?�청 ===")
+217:        self._worker.start()
+218:
+219:    def _handle_error(self, message: str) -> None:
+220:        self._append_log(f"[?�류] {message}")
+221:        QMessageBox.critical(self, "?�행 ?�류", message)
+222:        self.run_button.setEnabled(True)
+223:
+224:    def _handle_finished(self) -> None:
+225:        self._append_log("=== ?�행 ?�료 ===")
+226:        self.run_button.setEnabled(True)
+227:
+228:    def _toggle_always_on_top(self, checked: bool) -> None:
+229:        self.setWindowFlag(Qt.WindowStaysOnTopHint, checked)
+230:        self.show()
+231:
+232:    def _append_log(self, text: str) -> None:
+233:        self.log_output.append(text)
+234:
+235:
+236:def run_app() -> None:
+237:    app = QApplication.instance() or QApplication([])
+238:    window = MainWindow()
+239:    window.show()
+240:    app.exec()
+241:
