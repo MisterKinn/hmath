@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Any
 
 from backend.hwp.hwp_equation_utils import (
     EquationAutomationError,
@@ -17,9 +17,9 @@ from backend.hwp.hwp_equation_utils import (
 )
 
 try:
-    import pyhwpx
+    import pyhwpx  # type: ignore[import-not-found]
 except ImportError:  # pragma: no cover
-    pyhwpx = None  # type: ignore
+    pyhwpx = None  # type: ignore[assignment]
 
 
 logger = logging.getLogger(__name__)
@@ -33,7 +33,7 @@ class HwpNotAvailableError(HwpControllerError):
     """Raised when pyhwpx / HWP automation is unavailable on the host OS."""
 
 
-@dataclass(slots=True)
+@dataclass
 class HwpConnectionOptions:
     """
     Simple container for configuring how we attach to Hancom Hangul.
@@ -59,7 +59,7 @@ class HwpController:
 
     def __init__(self, options: Optional[HwpConnectionOptions] = None) -> None:
         self._options = options or HwpConnectionOptions()
-        self._hwp: Optional["pyhwpx.Hwp"] = None
+        self._hwp: Optional[Any] = None
 
     # ------------------------------------------------------------------ #
     # Connection management
@@ -91,7 +91,7 @@ class HwpController:
     def is_connected(self) -> bool:
         return self._hwp is not None
 
-    def _ensure_connected(self) -> "pyhwpx.Hwp":
+    def _ensure_connected(self) -> Any:
         if self._hwp is None:
             raise HwpControllerError("HwpController.connect() must be called first.")
         return self._hwp

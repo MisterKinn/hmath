@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import Any
 
 
-@dataclass(slots=True)
+@dataclass
 class EquationOptions:
     """Display options applied right after creating the equation control."""
 
