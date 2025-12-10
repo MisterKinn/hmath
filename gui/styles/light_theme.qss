@@ -1,0 +1,142 @@
+QWidget {
+    background-color: #ffffff;
+    color: #2c2c2c;
+    font-family: 'Pretendard', 'Pretendard Variable', 'SF Pro Display', 'Segoe UI', sans-serif;
+    font-size: 14px;
+}
+
+#main-area {
+    background-color: #ffffff;
+}
+
+#sidebar {
+    background-color: #f7f7f8;
+    border-left: 1px solid #d1d5db;
+}
+
+QToolButton#pin-button {
+    border: none;
+    color: #999;
+    padding: 8px;
+    border-radius: 8px;
+    background-color: transparent;
+    font-size: 18px;
+}
+
+QToolButton#pin-button:hover {
+    background-color: #f0f0f0;
+}
+
+QToolButton#pin-button:checked {
+    color: #10a37f;
+    background-color: #e8f5f0;
+}
+
+#app-title {
+    font-size: 32px;
+    font-weight: 700;
+    color: #000000;
+    letter-spacing: -0.5px;
+}
+
+#app-subtitle {
+    font-size: 14px;
+    color: #6b7280;
+    font-weight: 400;
+}
+
+#templates-container {
+    background-color: transparent;
+}
+
+#template-btn {
+    background-color: #f7f7f8;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    padding: 8px 12px;
+    color: #2c2c2c;
+    font-size: 13px;
+    font-weight: 500;
+}
+
+#template-btn:hover {
+    background-color: #ececf1;
+    border-color: #10a37f;
+}
+
+QPushButton#help-button {
+    background-color: #f7f7f8;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    padding: 6px 12px;
+    color: #2c2c2c;
+    font-size: 13px;
+    font-weight: 500;
+}
+
+QPushButton#help-button:hover {
+    background-color: #ececf1;
+    border-color: #10a37f;
+}
+
+#input-container {
+    background-color: #ffffff;
+}
+
+QTextEdit#script-editor {
+    background-color: #f3f4f6;
+    border: 1px solid #d1d5db;
+    border-radius: 12px;
+    padding: 14px;
+    color: #2c2c2c;
+    font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+    font-size: 13px;
+    line-height: 1.6;
+}
+
+QTextEdit#script-editor:focus {
+    border: 2px solid #10a37f;
+    padding: 13px;
+}
+
+QPushButton#primary-action {
+    background-color: #10a37f;
+    color: #ffffff;
+    border: none;
+    border-radius: 8px;
+    padding: 10px 24px;
+    font-size: 14px;
+    font-weight: 600;
+}
+
+QPushButton#primary-action:hover {
+    background-color: #0d8659;
+}
+
+QPushButton#primary-action:pressed {
+    background-color: #0a6f4f;
+}
+
+QPushButton#primary-action:disabled {
+    background-color: #d1d5db;
+}
+
+#log-output {
+    background-color: #f3f4f6;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    padding: 12px;
+    color: #444;
+    font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+    font-size: 12px;
+}
+
+#log-output:focus {
+    border: 2px solid #10a37f;
+    padding: 11px;
+}
+
+#success-indicator {
+    color: #10a37f;
+    font-size: 24px;
+}

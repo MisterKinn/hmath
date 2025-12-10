@@ -262,3 +262,27 @@ code {
     content: "ℹ️ ";
     font-size: 16px;
 }
+
+/* OK Button Styling */
+button {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #10a37f, stop:1 #0d8659);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    padding: 10px 32px;
+    font-size: 14px;
+    font-weight: 600;
+    min-width: 100px;
+}
+
+button:hover {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #12b594, stop:1 #0f9870);
+}
+
+button:pressed {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #0d8659, stop:1 #0a6f4f);
+    padding: 11px 31px 9px 33px;
+}

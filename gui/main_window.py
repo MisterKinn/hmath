@@ -26,12 +26,20 @@ from PySide6.QtWidgets import (
 
 from backend.hwp.hwp_controller import HwpController, HwpControllerError
 from backend.hwp.script_runner import HwpScriptRunner
+from backend.chatgpt_helper import ChatGPTHelper
 
 def _load_dialog_css() -> str:
     """Load external CSS file for dialogs."""
     css_path = Path(__file__).parent / "styles" / "dialog_styles.css"
     if css_path.exists():
         return css_path.read_text(encoding='utf-8')
+    return ""
+
+def _load_theme(theme_name: str) -> str:
+    """Load external QSS theme file."""
+    qss_path = Path(__file__).parent / "styles" / f"{theme_name}_theme.qss"
+    if qss_path.exists():
+        return qss_path.read_text(encoding='utf-8')
     return ""
 
 def _create_styled_dialog(parent, title: str, content: str, min_width: int = 500, min_height: int = 0) -> QMessageBox:
@@ -45,32 +53,6 @@ def _create_styled_dialog(parent, title: str, content: str, min_width: int = 500
     msg.setText(full_html)
     msg.setIcon(QMessageBox.Icon.NoIcon)
     msg.setStandardButtons(QMessageBox.StandardButton.Ok)
-    
-    # Enhanced OK button styling
-    ok_button = msg.button(QMessageBox.StandardButton.Ok)
-    if ok_button:
-        ok_button.setStyleSheet("""
-            QPushButton {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #10a37f, stop:1 #0d8659);
-                color: white;
-                border: none;
-                border-radius: 8px;
-                padding: 10px 32px;
-                font-size: 14px;
-                font-weight: 600;
-                min-width: 100px;
-            }
-            QPushButton:hover {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #12b594, stop:1 #0f9870);
-            }
-            QPushButton:pressed {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #0d8659, stop:1 #0a6f4f);
-                padding: 11px 31px 9px 33px;
-            }
-        """)
     
     msg.setMinimumWidth(min_width)
     if min_height > 0:
@@ -113,68 +95,9 @@ TEMPLATES = {
     }
 }
 
-# Theme definitions
-LIGHT_THEME = """
-QWidget {
-    background-color: #ffffff;
-    color: #2c2c2c;
-    font-family: 'Pretendard', 'Pretendard Variable', 'SF Pro Display', 'Segoe UI', sans-serif;
-    font-size: 14px;
-}
-#main-area { background-color: #ffffff; }
-#sidebar { background-color: #f7f7f8; border-left: 1px solid #d1d5db; }
-QToolButton#pin-button { border: none; color: #999; padding: 8px; border-radius: 8px; background-color: transparent; font-size: 18px; }
-QToolButton#pin-button:hover { background-color: #f0f0f0; }
-QToolButton#pin-button:checked { color: #10a37f; background-color: #e8f5f0; }
-#app-title { font-size: 32px; font-weight: 700; color: #000000; letter-spacing: -0.5px; }
-#app-subtitle { font-size: 14px; color: #6b7280; font-weight: 400; }
-#templates-container { background-color: transparent; }
-#template-btn { background-color: #f7f7f8; border: 1px solid #d1d5db; border-radius: 8px; padding: 8px 12px; color: #2c2c2c; font-size: 13px; font-weight: 500; }
-#template-btn:hover { background-color: #ececf1; border-color: #10a37f; }
-QPushButton#help-button { background-color: #f7f7f8; border: 1px solid #d1d5db; border-radius: 8px; padding: 6px 12px; color: #2c2c2c; font-size: 13px; font-weight: 500; }
-QPushButton#help-button:hover { background-color: #ececf1; border-color: #10a37f; }
-#input-container { background-color: #ffffff; }
-QTextEdit#script-editor { background-color: #f3f4f6; border: 1px solid #d1d5db; border-radius: 12px; padding: 14px; color: #2c2c2c; font-family: 'Menlo', 'Monaco', 'Courier New', monospace; font-size: 13px; line-height: 1.6; }
-QTextEdit#script-editor:focus { border: 2px solid #10a37f; padding: 13px; }
-QPushButton#primary-action { background-color: #10a37f; color: #ffffff; border: none; border-radius: 8px; padding: 10px 24px; font-size: 14px; font-weight: 600; }
-QPushButton#primary-action:hover { background-color: #0d8659; }
-QPushButton#primary-action:pressed { background-color: #0a6f4f; }
-QPushButton#primary-action:disabled { background-color: #d1d5db; }
-#log-output { background-color: #f3f4f6; border: 1px solid #d1d5db; border-radius: 8px; padding: 12px; color: #444; font-family: 'Menlo', 'Monaco', 'Courier New', monospace; font-size: 12px; }
-#log-output:focus { border: 2px solid #10a37f; padding: 11px; }
-#success-indicator { color: #10a37f; font-size: 24px; }
-"""
-
-DARK_THEME = """
-QWidget {
-    background-color: #000000;
-    color: #e8e8e8;
-    font-family: 'Pretendard', 'Pretendard Variable', 'SF Pro Display', 'Segoe UI', sans-serif;
-    font-size: 14px;
-}
-#main-area { background-color: #000000; }
-#sidebar { background-color: #0a0a0a; border-left: 1px solid #333333; }
-QToolButton#pin-button { border: none; color: #999; padding: 8px; border-radius: 8px; background-color: transparent; font-size: 18px; }
-QToolButton#pin-button:hover { background-color: #2a2a2a; }
-QToolButton#pin-button:checked { color: #10b981; background-color: #1a3a2f; }
-#app-title { font-size: 32px; font-weight: 700; color: #f0f0f0; letter-spacing: -0.5px; }
-#app-subtitle { font-size: 14px; color: #999; font-weight: 400; }
-#templates-container { background-color: transparent; }
-#template-btn { background-color: #1a1a1a; border: 1px solid #4a4a4a; border-radius: 8px; padding: 8px 12px; color: #e8e8e8; font-size: 13px; font-weight: 500; }
-#template-btn:hover { background-color: #2a2a2a; border-color: #10b981; }
-QPushButton#help-button { background-color: #1a1a1a; border: 1px solid #4a4a4a; border-radius: 8px; padding: 6px 12px; color: #e8e8e8; font-size: 13px; font-weight: 500; }
-QPushButton#help-button:hover { background-color: #2a2a2a; border-color: #10b981; }
-#input-container { background-color: #000000; }
-QTextEdit#script-editor { background-color: #1a1a1a; border: 1px solid #4a4a4a; border-radius: 12px; padding: 14px; color: #e8e8e8; font-family: 'Menlo', 'Monaco', 'Courier New', monospace; font-size: 13px; line-height: 1.6; }
-QTextEdit#script-editor:focus { border: 2px solid #10b981; padding: 13px; }
-QPushButton#primary-action { background-color: #10b981; color: #ffffff; border: none; border-radius: 8px; padding: 10px 24px; font-size: 14px; font-weight: 600; }
-QPushButton#primary-action:hover { background-color: #0d9b6f; }
-QPushButton#primary-action:pressed { background-color: #0a8559; }
-QPushButton#primary-action:disabled { background-color: #4a4a4a; }
-#log-output { background-color: #1a1a1a; border: 1px solid #4a4a4a; border-radius: 8px; padding: 12px; color: #bbb; font-family: 'Menlo', 'Monaco', 'Courier New', monospace; font-size: 12px; }
-#log-output:focus { border: 2px solid #10b981; padding: 11px; }
-#success-indicator { color: #10b981; font-size: 24px; }
-"""
+# Themes are now loaded from external QSS files
+# - gui/styles/light_theme.qss
+# - gui/styles/dark_theme.qss
 
 
 class ScriptWorker(QThread):
@@ -206,6 +129,7 @@ class MainWindow(QMainWindow):
         self.resize(900, 900)
         self._worker: Optional[ScriptWorker] = None
         self.dark_mode = False
+        self.chatgpt = ChatGPTHelper()
         self._build_ui()
         self._apply_styles()
 
@@ -319,6 +243,20 @@ class MainWindow(QMainWindow):
         self.latex_button.clicked.connect(self._show_latex_helper)
         layout.addWidget(self.latex_button)
         
+        self.ai_generate_button = QPushButton("🤖 AI Generate")
+        self.ai_generate_button.setObjectName("help-button")
+        self.ai_generate_button.setMaximumWidth(140)
+        self.ai_generate_button.setMinimumHeight(36)
+        self.ai_generate_button.clicked.connect(self._show_ai_generate_dialog)
+        layout.addWidget(self.ai_generate_button)
+        
+        self.ai_optimize_button = QPushButton("✨ AI Optimize")
+        self.ai_optimize_button.setObjectName("help-button")
+        self.ai_optimize_button.setMaximumWidth(140)
+        self.ai_optimize_button.setMinimumHeight(36)
+        self.ai_optimize_button.clicked.connect(self._show_ai_optimize_dialog)
+        layout.addWidget(self.ai_optimize_button)
+        
         layout.addStretch()
         return container
 
@@ -430,7 +368,9 @@ class MainWindow(QMainWindow):
         return frame
 
     def _apply_styles(self) -> None:
-        self.setStyleSheet(LIGHT_THEME)
+        theme = "light" if not self.dark_mode else "dark"
+        stylesheet = _load_theme(theme)
+        self.setStyleSheet(stylesheet)
 
     def _handle_run_clicked(self) -> None:
         if self._worker and self._worker.isRunning():
@@ -581,10 +521,9 @@ class MainWindow(QMainWindow):
         """Toggle between light and dark theme."""
         self.dark_mode = checked
         self._set_theme_glyph(checked)
-        if checked:
-            self.setStyleSheet(DARK_THEME)
-        else:
-            self.setStyleSheet(LIGHT_THEME)
+        theme = "dark" if checked else "light"
+        stylesheet = _load_theme(theme)
+        self.setStyleSheet(stylesheet)
 
     def _set_theme_glyph(self, active: bool) -> None:
         """Set theme toggle icon."""
@@ -816,6 +755,123 @@ class MainWindow(QMainWindow):
 """
         msg = _create_styled_dialog(self, "설정", settings_content, 550)
         msg.exec()
+
+    def _show_ai_generate_dialog(self) -> None:
+        """Show dialog to generate script with ChatGPT."""
+        if not self.chatgpt.is_available():
+            self._show_error_dialog(
+                "ChatGPT API를 사용할 수 없습니다.\n\n"
+                "설정 방법:\n"
+                "1. OpenAI 계정 생성 (https://openai.com)\n"
+                "2. API 키 발급\n"
+                "3. OPENAI_API_KEY 환경변수 설정\n"
+                "4. 앱 재시작"
+            )
+            return
+
+        # Use a simple text input via QMessageBox
+        text, ok = self._get_text_input(
+            "🤖 AI Script Generator",
+            "스크립트 생성을 위한 설명을 입력하세요:\n\n"
+            "예: '처음에 \"수학 문제\"라는 제목을 입력하고, '\n"
+            "'그 아래에 이차방정식 공식을 LaTeX로 삽입해주세요'"
+        )
+        
+        if ok and text.strip():
+            self._generate_script_with_ai(text)
+
+    def _show_ai_optimize_dialog(self) -> None:
+        """Show dialog to optimize current script with ChatGPT."""
+        if not self.chatgpt.is_available():
+            self._show_error_dialog(
+                "ChatGPT API를 사용할 수 없습니다.\n\n"
+                "설정 방법:\n"
+                "1. OpenAI 계정 생성 (https://openai.com)\n"
+                "2. API 키 발급\n"
+                "3. OPENAI_API_KEY 환경변수 설정\n"
+                "4. 앱 재시작"
+            )
+            return
+
+        current_script = self.script_edit.toPlainText()
+        if not current_script.strip():
+            self._show_info_dialog("알림", "최적화할 스크립트가 없습니다.")
+            return
+
+        text, ok = self._get_text_input(
+            "✨ AI Script Optimizer",
+            "최적화 요청사항을 입력하세요 (선택사항):\n\n"
+            "예: '코드를 더 간결하게 만들어주세요'\n"
+            "또는: '에러 처리를 추가해주세요'\n\n"
+            "(비워두면 기본 최적화가 진행됩니다)"
+        )
+        
+        if ok:
+            self._optimize_script_with_ai(text)
+
+    def _get_text_input(self, title: str, prompt: str) -> tuple[str, bool]:
+        """Get text input from user via dialog."""
+        msg = QMessageBox(self)
+        msg.setWindowTitle(title)
+        msg.setText(prompt)
+        msg.setStandardButtons(QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel)
+        
+        # Create input field
+        input_field = QTextEdit()
+        input_field.setMinimumHeight(100)
+        input_field.setMinimumWidth(400)
+        
+        layout = msg.layout()
+        if layout:
+            layout.addWidget(input_field)
+        
+        ok = msg.exec() == QMessageBox.StandardButton.Ok
+        return input_field.toPlainText(), ok
+
+    def _generate_script_with_ai(self, description: str) -> None:
+        """Generate script using ChatGPT API."""
+        self._append_log("🤖 AI가 스크립트를 생성하는 중...")
+        self.run_button.setEnabled(False)
+        
+        # Get available functions context
+        context = """
+사용 가능한 함수들:
+- insert_text(text): 텍스트 삽입
+- insert_paragraph(): 문단 추가
+- insert_equation(latex_code, font_size_pt=14.0): LaTeX 수식 삽입
+- insert_hwpeqn(hwpeqn_code, font_size_pt=12.0): HWP 수식 형식 삽입
+- insert_image(image_path): 이미지 삽입
+"""
+        
+        generated_code = self.chatgpt.generate_script(description, context)
+        
+        if generated_code:
+            self.script_edit.setPlainText(generated_code)
+            self._append_log("✅ 스크립트 생성 완료!")
+            self._show_info_dialog("생성 완료", "AI가 스크립트를 생성했습니다.\n확인하고 실행해주세요.")
+        else:
+            self._append_log("❌ 스크립트 생성 실패")
+            self._show_error_dialog("스크립트 생성 중 오류가 발생했습니다.\nAPI 키를 확인해주세요.")
+        
+        self.run_button.setEnabled(True)
+
+    def _optimize_script_with_ai(self, feedback: str) -> None:
+        """Optimize current script using ChatGPT API."""
+        self._append_log("✨ AI가 스크립트를 최적화하는 중...")
+        self.run_button.setEnabled(False)
+        
+        current_script = self.script_edit.toPlainText()
+        optimized_code = self.chatgpt.optimize_script(current_script, feedback)
+        
+        if optimized_code:
+            self.script_edit.setPlainText(optimized_code)
+            self._append_log("✅ 스크립트 최적화 완료!")
+            self._show_info_dialog("최적화 완료", "AI가 스크립트를 최적화했습니다.")
+        else:
+            self._append_log("❌ 스크립트 최적화 실패")
+            self._show_error_dialog("스크립트 최적화 중 오류가 발생했습니다.\nAPI 키를 확인해주세요.")
+        
+        self.run_button.setEnabled(True)
 
 
 def run_app() -> None:

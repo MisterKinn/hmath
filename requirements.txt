@@ -6,4 +6,5 @@ pytesseract>=0.3.10
 opencv-python>=4.10.0
 numpy>=1.26
 pyinstaller>=6.0
-
+openai>=1.0.0
+python-dotenv>=1.0.0
