@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Callable
 
 try:
     from dotenv import load_dotenv  # type: ignore[import]
@@ -63,12 +63,13 @@ class ChatGPTHelper:
         """Check if ChatGPT is available."""
         return self.client is not None and self.api_key is not None
 
-    def generate_script(self, description: str, context: str = "") -> Optional[str]:
+    def generate_script(self, description: str, context: str = "", on_thought: Optional[Callable[[str], None]] = None) -> Optional[str]:
         """Generate a Python script based on description.
         
         Args:
             description: Description of what the script should do
             context: Additional context (e.g., available functions)
+            on_thought: Optional callback function to receive thought process updates
             
         Returns:
             Generated Python script or None if failed
@@ -76,27 +77,32 @@ class ChatGPTHelper:
         if not self.is_available():
             return None
 
-        system_prompt = """You are an expert Python developer specializing in HWP (한글) automation scripts.
-Your task is to generate Python scripts that use the following functions to automate HWP document creation:
-- insert_text(text: str): Insert text into the document
-- insert_paragraph(): Insert a paragraph break
-- insert_equation(latex: str, font_size_pt: float = 14.0): Insert LaTeX equations
-- insert_hwpeqn(hwpeqn: str, font_size_pt: float = 12.0, eq_font_name: str = "HYhwpEQ"): Insert HWP equation format
-- insert_image(image_path: str): Insert an image into the document
-
-Generate ONLY the Python code without any explanations or markdown formatting.
-The code should be clean, well-commented, and follow best practices."""
-
-        user_message = f"""Generate a Python script for HWP automation with the following requirements:
-
-{description}
-
-{f'Additional context:{context}' if context else ''}
-
-Remember to include helpful comments and make the code reusable."""
+        system_prompt = (
+            "You are an expert Python developer specializing in HWP (한글) automation scripts. "
+            "Your task is to generate only the minimal Python code needed for the user's request, using the following functions: "
+            "- insert_text(text: str): Insert text into the document "
+            "- insert_paragraph(): Insert a paragraph break "
+            "- insert_equation(latex: str, font_size_pt: float = 14.0): Insert LaTeX equations "
+            "- insert_hwpeqn(hwpeqn: str, font_size_pt: float = 12.0, eq_font_name: str = 'HYhwpEQ'): Insert HWP equation format "
+            "- insert_image(image_path: str): Insert an image into the document "
+            "Return ONLY the essential lines of code for the requested task, without any boilerplate, classes, functions, or extra comments unless explicitly requested. Be as brief as possible. Do not include explanations or markdown formatting."
+        )
+        user_message = (
+            f"Generate minimal Python code for HWP automation with the following requirements:\n\n"
+            f"{description}\n\n"
+            f"{f'Additional context:{context}' if context else ''}\n\n"
+            "Return only the essential code, no extra comments, classes, or functions unless specifically requested."
+        )
 
         try:
+            if on_thought:
+                on_thought("[1/3] 사용자 요청 분석 중...")
+            
             print("[ChatGPT] Generating script...")
+            
+            if on_thought:
+                on_thought("[2/3] 스크립트 생성 중...")
+            
             # Combine system prompt and user message for gpt-5-nano
             full_prompt = f"{system_prompt}\n\n{user_message}"
             response = self.client.responses.create(  # type: ignore[union-attr]
@@ -104,18 +110,25 @@ Remember to include helpful comments and make the code reusable."""
                 input=full_prompt
             )
             generated = response.output_text
+            
+            if on_thought:
+                on_thought("[3/3] 스크립트 완성")
+            
             print(f"[ChatGPT] Script generated successfully ({len(generated)} characters)")
             return generated
         except Exception as e:
+            if on_thought:
+                on_thought(f"❌ 오류 발생: {type(e).__name__}")
             print(f"[ChatGPT] ERROR generating script: {type(e).__name__}: {e}")
             return None
 
-    def optimize_script(self, script: str, feedback: str = "") -> Optional[str]:
+    def optimize_script(self, script: str, feedback: str = "", on_thought: Optional[Callable[[str], None]] = None) -> Optional[str]:
         """Optimize an existing script based on feedback.
         
         Args:
             script: The script to optimize
             feedback: Optional feedback about what to improve
+            on_thought: Optional callback function to receive thought process updates
             
         Returns:
             Optimized Python script or None if failed
@@ -123,23 +136,32 @@ Remember to include helpful comments and make the code reusable."""
         if not self.is_available():
             return None
 
-        system_prompt = """You are an expert Python developer specializing in HWP automation scripts.
-Your task is to optimize and improve Python scripts that automate HWP document creation.
-Improve code quality, efficiency, readability, and error handling.
-Generate ONLY the optimized Python code without any explanations or markdown formatting."""
-
-        user_message = f"""Please optimize this HWP automation script:
-
-```python
-{script}
-```
-
-{f'Optimization goals: {feedback}' if feedback else 'Focus on code quality, readability, and best practices.'}
-
-Return only the optimized code without any explanations."""
+        system_prompt = (
+            "You are an expert Python developer specializing in HWP automation scripts. "
+            "Your task is to simplify and optimize Python scripts for HWP document automation. "
+            "Make the code as simple and minimal as possible, removing unnecessary complexity, boilerplate, and redundant steps. "
+            "Prioritize brevity, clarity, and directness. Apply the user's feedback for simplification. "
+            "Do not include explanations or markdown formatting—return only the simplified code."
+        )
+        user_message = (
+            f"Simplify and optimize this HWP automation script:\n\n"
+            f"```python\n{script}\n```\n\n"
+            f"{f'Simplification goals: {feedback}' if feedback else 'Make the code as simple and minimal as possible.'}\n\n"
+            "Return only the simplified code, no explanations."
+        )
 
         try:
+            if on_thought:
+                on_thought("[1/4] 현재 스크립트 분석 중...")
+            
             print("[ChatGPT] Optimizing script...")
+            
+            if on_thought:
+                on_thought("[2/4] 최적화 전략 수립 중...")
+            
+            if on_thought:
+                on_thought("[3/4] 코드 개선 중...")
+            
             # Combine system prompt and user message for gpt-5-nano
             full_prompt = f"{system_prompt}\n\n{user_message}"
             response = self.client.responses.create(  # type: ignore[union-attr]
@@ -147,9 +169,15 @@ Return only the optimized code without any explanations."""
                 input=full_prompt
             )
             optimized = response.output_text
+            
+            if on_thought:
+                on_thought("[4/4] 최적화 완료!")
+            
             print(f"[ChatGPT] Script optimized successfully ({len(optimized)} characters)")
             return optimized
         except Exception as e:
+            if on_thought:
+                on_thought(f"❌ 오류 발생: {type(e).__name__}")
             print(f"[ChatGPT] ERROR optimizing script: {type(e).__name__}: {e}")
             return None
 

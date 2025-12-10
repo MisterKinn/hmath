@@ -9,6 +9,7 @@ from PySide6.QtCore import Qt, Signal, QThread, QObject, QSize, QTimer, QPropert
 from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
+    QDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -28,6 +29,66 @@ from backend.hwp.hwp_controller import HwpController, HwpControllerError
 from backend.hwp.script_runner import HwpScriptRunner
 from backend.chatgpt_helper import ChatGPTHelper
 
+
+class AIWorker(QObject):
+    """Worker for running AI tasks in a separate thread."""
+    finished = Signal(str)  # Emits the generated/optimized script
+    error = Signal(str)  # Emits error message
+    thought = Signal(str)  # Emits thought process updates
+    
+    def __init__(self, chatgpt: ChatGPTHelper, task_type: str, **kwargs):
+        super().__init__()
+        self.chatgpt = chatgpt
+        self.task_type = task_type
+        self.kwargs = kwargs
+    
+    def run(self):
+        """Run the AI task."""
+        import traceback
+        try:
+            print(f"[AIWorker] Starting {self.task_type} task...")
+            
+            def on_thought(message: str):
+                print(f"[AIWorker] Thought: {message}")
+                self.thought.emit(message)
+            
+            if self.task_type == "generate":
+                print(f"[AIWorker] Calling generate_script...")
+                result = self.chatgpt.generate_script(
+                    self.kwargs['description'],
+                    self.kwargs.get('context', ''),
+                    on_thought=on_thought
+                )
+                print(f"[AIWorker] Generate result: {len(result) if result else 0} chars")
+            elif self.task_type == "optimize":
+                print(f"[AIWorker] Calling optimize_script...")
+                result = self.chatgpt.optimize_script(
+                    self.kwargs['script'],
+                    self.kwargs.get('feedback', ''),
+                    on_thought=on_thought
+                )
+                print(f"[AIWorker] Optimize result: {len(result) if result else 0} chars")
+            else:
+                error_msg = "Unknown task type"
+                print(f"[AIWorker] ERROR: {error_msg}")
+                self.error.emit(error_msg)
+                return
+            
+            if result:
+                print(f"[AIWorker] Success! Emitting finished signal")
+                self.finished.emit(result)
+            else:
+                error_msg = "AI returned no result"
+                print(f"[AIWorker] ERROR: {error_msg}")
+                self.error.emit(error_msg)
+        except Exception as e:
+            error_msg = f"{type(e).__name__}: {str(e)}"
+            error_trace = traceback.format_exc()
+            print(f"[AIWorker] EXCEPTION: {error_msg}")
+            print(f"[AIWorker] Traceback:\n{error_trace}")
+            self.error.emit(f"{error_msg}\n\nTraceback:\n{error_trace}")
+
+
 def _load_dialog_css() -> str:
     """Load external CSS file for dialogs."""
     css_path = Path(__file__).parent / "styles" / "dialog_styles.css"
@@ -42,10 +103,11 @@ def _load_theme(theme_name: str) -> str:
         return qss_path.read_text(encoding='utf-8')
     return ""
 
-def _create_styled_dialog(parent, title: str, content: str, min_width: int = 500, min_height: int = 0) -> QMessageBox:
+def _create_styled_dialog(parent, title: str, content: str, min_width: int = 500, min_height: int = 0, dark_mode: bool = False) -> QMessageBox:
     """Create a styled dialog with enhanced OK button."""
     css = _load_dialog_css()
-    full_html = f"<style>{css}</style>{content}"
+    dark_class = "dark-mode" if dark_mode else ""
+    full_html = f"<style>{css}</style><body class='{dark_class}'>{content}</body>"
     
     msg = QMessageBox(parent)
     msg.setWindowTitle(title)
@@ -53,6 +115,27 @@ def _create_styled_dialog(parent, title: str, content: str, min_width: int = 500
     msg.setText(full_html)
     msg.setIcon(QMessageBox.Icon.NoIcon)
     msg.setStandardButtons(QMessageBox.StandardButton.Ok)
+    
+    # Apply QSS styling to the OK button
+    button_style = """
+        QPushButton {
+            background-color: #5377f6;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 8px 24px;
+            font-size: 13px;
+            font-weight: 600;
+            min-width: 80px;
+        }
+        QPushButton:hover {
+            background-color: #3e5fc7;
+        }
+        QPushButton:pressed {
+            background-color: #2e47a0;
+        }
+    """
+    msg.setStyleSheet(button_style)
     
     msg.setMinimumWidth(min_width)
     if min_height > 0:
@@ -117,7 +200,7 @@ class ScriptWorker(QThread):
             runner.run(self._script, self.log_signal.emit)
             self.finished_signal.emit()
         except HwpControllerError as exc:
-            self.error_signal.emit(f"HWP 연결 실패: {exc}")
+            self.error_signal.emit(f"HWP 연결 실패: {exc}\n한컴 에디터가 실행 중인지 확인해보세요.")
         except Exception as exc:
             self.error_signal.emit(str(exc))
 
@@ -128,10 +211,26 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("HMATH AI")
         self.resize(900, 900)
         self._worker: Optional[ScriptWorker] = None
-        self.dark_mode = False
+        self.dark_mode = True
         self.chatgpt = ChatGPTHelper()
         self._build_ui()
         self._apply_styles()
+
+    def _apply_button_icon(
+        self,
+        button: QPushButton,
+        icon_filename: str,
+        fallback_text: str,
+        icon_size: QSize = QSize(22, 22),
+    ) -> None:
+        """Set an icon on a button if the asset exists, otherwise fall back to text."""
+        icon_path = Path(__file__).resolve().parents[1] / "public" / "img" / icon_filename
+        if icon_path.exists():
+            button.setIcon(QIcon(str(icon_path)))
+            button.setIconSize(icon_size)
+            button.setText("")
+        else:
+            button.setText(fallback_text)
 
     def _build_ui(self) -> None:
         central = QWidget(self)
@@ -162,6 +261,23 @@ class MainWindow(QMainWindow):
         input_layout.setContentsMargins(40, 24, 40, 40)
         input_layout.setSpacing(20)
         
+        # Replace log_output QTextEdit with output_text QLabel
+        self.output_text = QLabel()
+        self.output_text.setObjectName("output-text")
+        self.output_text.setText("")
+        self.output_text.setStyleSheet("font-size: 15px; color: #5377f6; background: transparent; padding: 8px;")
+        self.output_text.setMinimumHeight(32)
+        self.output_text.setMaximumHeight(32)
+        self.output_text.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        input_layout.addWidget(self.output_text)
+        
+        # Script editor container with buttons inside
+        script_container = QWidget()
+        script_container.setObjectName("script-input-container")
+        script_layout = QVBoxLayout(script_container)
+        script_layout.setContentsMargins(14, 14, 14, 14)
+        script_layout.setSpacing(12)
+        
         # Script editor
         self.script_edit = QTextEdit()
         self.script_edit.setObjectName("script-editor")
@@ -170,32 +286,47 @@ class MainWindow(QMainWindow):
         self.script_edit.setMaximumHeight(220)
         self.script_edit.setMinimumHeight(160)
         
-        input_layout.addWidget(self.script_edit)
+        script_layout.addWidget(self.script_edit)
         
-        # Run button centered
-        run_row = QHBoxLayout()
-        run_row.setContentsMargins(0, 0, 0, 0)
+        # Bottom row with upload buttons on left and Run button on right (INSIDE script container)
+        bottom_row = QHBoxLayout()
+        bottom_row.setContentsMargins(0, 0, 0, 0)
+        bottom_row.setSpacing(12)
         
+        # Left side: File and Photo upload buttons
+        self.file_btn = QPushButton()
+        self.file_btn.setObjectName("upload-button")
+        self.file_btn.setMaximumWidth(44)
+        self.file_btn.setMinimumWidth(44)
+        self.file_btn.setMinimumHeight(44)
+        self.file_btn.setToolTip("파일 선택")
+        self._apply_button_icon(self.file_btn, "file_icon.png", "📁", icon_size=QSize(22, 22))
+        self.file_btn.clicked.connect(self._handle_file_upload)
+        bottom_row.addWidget(self.file_btn)
+        
+        self.photo_btn = QPushButton()
+        self.photo_btn.setObjectName("upload-button")
+        self.photo_btn.setMaximumWidth(44)
+        self.photo_btn.setMinimumWidth(44)
+        self.photo_btn.setMinimumHeight(44)
+        self.photo_btn.setToolTip("사진 선택")
+        self._apply_button_icon(self.photo_btn, "photo_icon.png", "🖼️", icon_size=QSize(60, 60))
+        self.photo_btn.clicked.connect(self._handle_photo_upload)
+        bottom_row.addWidget(self.photo_btn)
+        
+        bottom_row.addStretch()
+        
+        # Right side: Run button
         self.run_button = QPushButton("▶ Run")
         self.run_button.setObjectName("primary-action")
         self.run_button.setMaximumWidth(140)
         self.run_button.setMinimumHeight(44)
         self.run_button.clicked.connect(self._handle_run_clicked)
+        bottom_row.addWidget(self.run_button)
         
-        run_row.addStretch()
-        run_row.addWidget(self.run_button)
-        run_row.addStretch()
+        script_layout.addLayout(bottom_row)
         
-        input_layout.addLayout(run_row)
-        
-        # Log output
-        self.log_output = QTextEdit()
-        self.log_output.setObjectName("log-output")
-        self.log_output.setReadOnly(True)
-        self.log_output.setMaximumHeight(80)
-        self.log_output.setMinimumHeight(60)
-        self.log_output.setPlaceholderText("출력 결과가 이곳에 표시됩니다")
-        input_layout.addWidget(self.log_output)
+        input_layout.addWidget(script_container)
 
         main_column.addWidget(self.content_area, 1)
         main_column.addWidget(input_area, 0)
@@ -304,7 +435,7 @@ class MainWindow(QMainWindow):
     def _animate_focus(self, widget: QWidget) -> None:
         """Pulse animation when template is loaded."""
         original_style = widget.styleSheet()
-        widget.setStyleSheet(original_style + "\nborder-color: #10a37f !important;")
+        widget.setStyleSheet(original_style + "\nborder-color: #5377f6 !important;")
         timer = QTimer()
         
         def reset():
@@ -349,7 +480,8 @@ class MainWindow(QMainWindow):
         self.theme_btn.setCheckable(True)
         self.theme_btn.setToolTip("다크 모드")
         self.theme_btn.setAutoRaise(True)
-        self._set_theme_glyph(False)
+        self.theme_btn.setChecked(self.dark_mode)
+        self._set_theme_glyph(self.dark_mode)
         self.theme_btn.toggled.connect(self._toggle_theme)
 
         # Settings button
@@ -387,7 +519,6 @@ class MainWindow(QMainWindow):
 
     def _handle_error(self, message: str) -> None:
         self._append_log(f"[오류] {message}")
-        self._show_error_dialog(message)
         self.run_button.setEnabled(True)
 
     def _save_script(self) -> None:
@@ -420,6 +551,34 @@ class MainWindow(QMainWindow):
                 self._show_info_dialog("불러오기 완료", f"스크립트를 불러왔습니다:\n{file_path}")
             except Exception as e:
                 self._show_error_dialog(f"파일 불러오기 실패:\n{str(e)}")
+
+    def _handle_file_upload(self) -> None:
+        """Handle file upload button click."""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "파일 선택",
+            "",
+            "All Files (*)"
+        )
+        if file_path:
+            # Insert file path reference into script
+            file_ref = f'insert_image("{file_path}")'
+            current = self.script_edit.toPlainText()
+            self.script_edit.setPlainText(current + "\n" + file_ref)
+
+    def _handle_photo_upload(self) -> None:
+        """Handle photo upload button click."""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "사진 선택",
+            "",
+            "Image Files (*.png *.jpg *.jpeg *.bmp);;All Files (*)"
+        )
+        if file_path:
+            # Insert image path reference into script
+            img_ref = f'insert_image("{file_path}")'
+            current = self.script_edit.toPlainText()
+            self.script_edit.setPlainText(current + "\n" + img_ref)
 
     def _show_help_menu(self) -> None:
         """Show help menu dialog."""
@@ -466,7 +625,7 @@ class MainWindow(QMainWindow):
     <strong>문의사항:</strong> GitHub Issues를 통해 버그 리포트 및 기능 제안을 해주세요
 </div>
 """
-        msg = _create_styled_dialog(self, "도움말", content, 550)
+        msg = _create_styled_dialog(self, "도움말", content, 550, dark_mode=self.dark_mode)
         msg.exec()
 
     def _show_error_dialog(self, message: str) -> None:
@@ -485,7 +644,7 @@ class MainWindow(QMainWindow):
     </div>
 </div>
 """
-        msg = _create_styled_dialog(self, "오류", error_content, 500)
+        msg = _create_styled_dialog(self, "오류", error_content, 500, dark_mode=self.dark_mode)
         msg.exec()
 
     def _show_info_dialog(self, title: str, message: str) -> None:
@@ -500,7 +659,7 @@ class MainWindow(QMainWindow):
     </div>
 </div>
 """
-        msg = _create_styled_dialog(self, title, info_content, 450)
+        msg = _create_styled_dialog(self, title, info_content, 450, dark_mode=self.dark_mode)
         msg.exec()
 
     def _handle_finished(self) -> None:
@@ -512,10 +671,10 @@ class MainWindow(QMainWindow):
         """Show success indicator animation."""
         success = QLabel("✓")
         success.setObjectName("success-indicator")
-        success.setStyleSheet("color: #10b981; font-size: 28px;")
+        success.setStyleSheet("color: #5377f6; font-size: 28px;")
         
         # Show briefly in the log area
-        self.log_output.append("✓ 스크립트가 성공적으로 완료되었습니다!")
+        self.output_text.setText("✓ 스크립트가 성공적으로 완료되었습니다!")
 
     def _toggle_theme(self, checked: bool) -> None:
         """Toggle between light and dark theme."""
@@ -537,6 +696,15 @@ class MainWindow(QMainWindow):
     def _show_howto(self) -> None:
         """Show how to use dialog."""
         howto_content = """
+<style>
+  .functions { margin-top: 12px; }
+  .func-item { display: flex; flex-direction: column; gap: 2px; margin-bottom: 10px; }
+  .func-item code { background: #f3f4f6; color: #111827; padding: 6px 8px; border-radius: 8px; display: inline-block; }
+  .dark-mode .func-item code { background: #1f2937; color: #e5e7eb; }
+  .func-item small { color: #666; }
+  .dark-mode .func-item small { color: #9ca3af; }
+</style>
+
 <h2>🚀 HMATH AI 사용 가이드</h2>
 
 <div class="step">
@@ -563,28 +731,28 @@ class MainWindow(QMainWindow):
     <h3>📚 텍스트 작성 함수</h3>
     
     <div class="func-item">
-        <code>insert_text("텍스트\\r")</code><br>
-        <small style="color: #666;">텍스트 삽입 (\\r은 줄바꿈)</small>
+        <code>insert_text("텍스트\\r")</code>
+        <small>텍스트 삽입 (\\r은 줄바꿈)</small>
     </div>
     
     <div class="func-item">
-        <code>insert_paragraph()</code><br>
-        <small style="color: #666;">문단 나누기</small>
+        <code>insert_paragraph()</code>
+        <small>문단 나누기</small>
     </div>
     
     <div class="func-item">
-        <code>insert_equation("LaTeX")</code><br>
-        <small style="color: #666;">LaTeX 수식 삽입</small>
+        <code>insert_equation("LaTeX")</code>
+        <small>LaTeX 수식 삽입</small>
     </div>
     
     <div class="func-item">
-        <code>insert_hwpeqn("HwpEqn")</code><br>
-        <small style="color: #666;">HWP 수식 형식으로 삽입</small>
+        <code>insert_hwpeqn("HwpEqn")</code>
+        <small>HWP 수식 형식으로 삽입</small>
     </div>
     
     <div class="func-item">
-        <code>insert_image("경로/이미지.png")</code><br>
-        <small style="color: #666;">이미지 삽입</small>
+        <code>insert_image("경로/이미지.png")</code>
+        <small>이미지 삽입</small>
     </div>
 </div>
 
@@ -592,131 +760,154 @@ class MainWindow(QMainWindow):
     <h3>✨ 주요 기능</h3>
     
     <div class="func-item">
-        <span class="setting-label">💾 스크립트 저장</span><br>
-        <small style="color: #666;">현재 에디터의 코드를 Python 파일로 저장</small>
+        <span class="setting-label">💾 스크립트 저장</span>
+        <small>현재 에디터의 코드를 Python 파일로 저장</small>
     </div>
     
     <div class="func-item">
-        <span class="setting-label">📂 스크립트 불러오기</span><br>
-        <small style="color: #666;">저장된 코드 파일을 에디터에 불러오기</small>
+        <span class="setting-label">📂 스크립트 불러오기</span>
+        <small>저장된 코드 파일을 에디터에 불러오기</small>
     </div>
     
     <div class="func-item">
-        <span class="setting-label">🌙 다크 모드</span><br>
-        <small style="color: #666;">밝은 테마와 어두운 테마 전환</small>
+        <span class="setting-label">🌙 다크 모드</span>
+        <small>밝은 테마와 어두운 테마 전환</small>
     </div>
     
     <div class="func-item">
-        <span class="setting-label">⚙️ 설정</span><br>
-        <small style="color: #666;">앱 정보 및 단축키 확인</small>
+        <span class="setting-label">⚙️ 설정</span>
+        <small>앱 정보 및 단축키 확인</small>
     </div>
-</div>
-
-<div class="note">
-    <strong>참고:</strong> Windows 환경과 한컴 한글이 설치되어 있어야 합니다
 </div>
 """
-        msg = _create_styled_dialog(self, "사용 방법", howto_content, 600)
+        msg = _create_styled_dialog(self, "사용 방법", howto_content, 600, dark_mode=self.dark_mode)
         msg.exec()
 
     def _show_latex_helper(self) -> None:
         """Show LaTeX code examples."""
-        latex_content = """
+        latex_content = r"""
+<style>
+    table.guide { width: 100%; border-collapse: collapse; }
+    table.guide td { vertical-align: top; padding: 0 12px 0 0; }
+    .section { margin-bottom: 16px; }
+    .section-title { font-weight: 700; margin-bottom: 6px; }
+    .codes { display: block; }
+    .codes code { display: block; background: #f3f4f6; color: #111827; padding: 6px 8px; border-radius: 8px; margin-bottom: 6px; }
+    .dark-mode .codes code { background: #1f2937; color: #e5e7eb; }
+    .codes.inline code { display: inline-block; margin-right: 8px; margin-bottom: 6px; background: transparent; padding: 0; }
+</style>
+
 <h2>📐 LaTeX 수식 가이드</h2>
 
-<div class="columns">
-<div class="column">
-    <div class="section">
-        <div class="section-title">기본 수식</div>
-        <code>x = \\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}</code>
-        <code>E = mc^2</code>
-    </div>
-    
-    <div class="section">
-        <div class="section-title">적분</div>
-        <code>\\int_{0}^{\\infty} e^{-x^2} dx</code>
-        <code>\\int x^n dx = \\frac{x^{n+1}}{n+1}</code>
-    </div>
-    
-    <div class="section">
-        <div class="section-title">합 & 곱</div>
-        <code>\\sum_{i=1}^{n} i = \\frac{n(n+1)}{2}</code>
-        <code>\\prod_{i=1}^{n} a_i</code>
-    </div>
-    
-    <div class="section">
-        <div class="section-title">분수 & 제곱근</div>
-        <code>\\frac{a}{b}, \\sqrt{x}, \\sqrt[n]{x}</code>
-    </div>
-    
-    <div class="section">
-        <div class="section-title">미분 & 극한</div>
-        <code>\\frac{df}{dx}, f'(x)</code>
-        <code>\\lim_{x \\to \\infty} f(x)</code>
-    </div>
-</div>
-
-<div class="column">
-    <div class="section greek">
-        <div class="section-title">그리스 문자 (소문자)</div>
-        <code>\\alpha</code> <code>\\beta</code> <code>\\gamma</code> <code>\\delta</code>
-        <code>\\epsilon</code> <code>\\theta</code> <code>\\lambda</code> <code>\\mu</code>
-        <code>\\pi</code> <code>\\sigma</code> <code>\\phi</code> <code>\\omega</code>
-    </div>
-    
-    <div class="section greek">
-        <div class="section-title">그리스 문자 (대문자)</div>
-        <code>\\Gamma</code> <code>\\Delta</code> <code>\\Theta</code> <code>\\Lambda</code>
-        <code>\\Pi</code> <code>\\Sigma</code> <code>\\Phi</code> <code>\\Omega</code>
-    </div>
-    
-    <div class="section greek">
-        <div class="section-title">관계 & 집합</div>
-        <code>\\leq</code> <code>\\geq</code> <code>\\neq</code> <code>\\approx</code>
-        <code>\\in</code> <code>\\subset</code> <code>\\cap</code> <code>\\cup</code>
-    </div>
-    
-    <div class="section greek">
-        <div class="section-title">논리 & 기타</div>
-        <code>\\exists</code> <code>\\forall</code> <code>\\Rightarrow</code>
-        <code>\\infty</code> <code>\\partial</code> <code>\\nabla</code>
-    </div>
-</div>
-
-<div class="column">
-    <div class="section">
-        <div class="section-title">행렬</div>
-        <code>\\begin{bmatrix}<br>a & b \\\\<br>c & d<br>\\end{bmatrix}</code>
-        <code>\\begin{pmatrix}<br>1 & 2 \\\\<br>3 & 4<br>\\end{pmatrix}</code>
-    </div>
-    
-    <div class="section">
-        <div class="section-title">괄호</div>
-        <code>\\left( x \\right)</code>
-        <code>\\left[ x \\right]</code>
-        <code>\\left\\{ x \\right\\}</code>
-    </div>
-    
-    <div class="section">
-        <div class="section-title">분할 식</div>
-        <code>f(x) = \\begin{cases}<br>x^2 & x \\geq 0 \\\\<br>-x & x < 0<br>\\end{cases}</code>
-    </div>
-    
-    <div class="section">
-        <div class="section-title">기타</div>
-        <code>\\binom{n}{k}</code>
-        <code>\\frac{\\partial f}{\\partial x}</code>
-    </div>
-</div>
-</div>
+<table class="guide">
+    <tr>
+        <td width="33%">
+            <div class="section">
+                <div class="section-title">기본 수식</div>
+                <div class="codes">
+                    <code>x = \frac{-b \pm \sqrt{b^2-4ac}}{2a}</code>
+                    <code>E = mc^2</code>
+                </div>
+            </div>
+            <div class="section">
+                <div class="section-title">적분</div>
+                <div class="codes">
+                    <code>\int_{0}^{\infty} e^{-x^2} dx</code>
+                    <code>\int x^n dx = \frac{x^{n+1}}{n+1}</code>
+                </div>
+            </div>
+            <div class="section">
+                <div class="section-title">합 & 곱</div>
+                <div class="codes">
+                    <code>\sum_{i=1}^{n} i = \frac{n(n+1)}{2}</code>
+                    <code>\prod_{i=1}^{n} a_i</code>
+                </div>
+            </div>
+            <div class="section">
+                <div class="section-title">분수 & 제곱근</div>
+                <div class="codes">
+                    <code>\frac{a}{b}</code>
+                    <code>\sqrt{x}, \sqrt[n]{x}</code>
+                </div>
+            </div>
+        </td>
+        <td width="33%">
+            <div class="section">
+                <div class="section-title">미분 & 극한</div>
+                <div class="codes">
+                    <code>\frac{df}{dx}, f'(x)</code>
+                    <code>\lim_{x \to \infty} f(x)</code>
+                </div>
+            </div>
+            <div class="section">
+                <div class="section-title">행렬</div>
+                <div class="codes">
+                    <code>\begin{bmatrix}<br>a & b \\<br>c & d<br>\end{bmatrix}</code>
+                    <code>\begin{pmatrix}<br>1 & 2 \\<br>3 & 4<br>\end{pmatrix}</code>
+                </div>
+            </div>
+            <div class="section">
+                <div class="section-title">괄호</div>
+                <div class="codes">
+                    <code>\left( x \right)</code>
+                    <code>\left[ x \right)</code>
+                    <code>\left\{ x \right\}</code>
+                </div>
+            </div>
+            <div class="section">
+                <div class="section-title">분할 식</div>
+                <div class="codes">
+                    <code>f(x) = \begin{cases}<br>x^2 & x \geq 0 \\<br>-x & x < 0<br>\end{cases}</code>
+                </div>
+            </div>
+        </td>
+        <td width="33%">
+            <div class="section">
+                <div class="section-title">기타</div>
+                <div class="codes">
+                    <code>\binom{n}{k}</code>
+                    <code>\frac{\partial f}{\partial x}</code>
+                </div>
+            </div>
+            <div class="section">
+                <div class="section-title">그리스 문자 (소문자)</div>
+                <div class="codes inline">
+                    <code>\alpha</code><code>\beta</code><code>\gamma</code><code>\delta</code>
+                    <code>\epsilon</code><code>\theta</code><code>\lambda</code><code>\mu</code>
+                    <code>\pi</code><code>\sigma</code><code>\phi</code><code>\omega</code>
+                </div>
+            </div>
+            <div class="section">
+                <div class="section-title">그리스 문자 (대문자)</div>
+                <div class="codes inline">
+                    <code>\Gamma</code><code>\Delta</code><code>\Theta</code><code>\Lambda</code>
+                    <code>\Pi</code><code>\Sigma</code><code>\Phi</code><code>\Omega</code>
+                </div>
+            </div>
+            <div class="section">
+                <div class="section-title">관계 & 집합</div>
+                <div class="codes inline">
+                    <code>\leq</code><code>\geq</code><code>\neq</code><code>\approx</code>
+                    <code>\in</code><code>\subset</code><code>\cap</code><code>\cup</code>
+                </div>
+            </div>
+            <div class="section">
+                <div class="section-title">논리 & 기타</div>
+                <div class="codes inline">
+                    <code>\exists</code><code>\forall</code><code>\Rightarrow</code>
+                    <code>\infty</code><code>\partial</code><code>\nabla</code>
+                </div>
+            </div>
+        </td>
+    </tr>
+</table>
 """
-        msg = _create_styled_dialog(self, "LaTeX 수식 가이드", latex_content, 900, 600)
-        msg.exec()
-        msg.setMinimumHeight(600)
+        msg = _create_styled_dialog(self, "LaTeX 수식 가이드", latex_content, 900, 600, dark_mode=self.dark_mode)
         msg.exec()
 
     def _append_log(self, text: str) -> None:
-        self.log_output.append(text)
+        """Update output text with latest message."""
+        self.output_text.setText(text)
 
     def _set_settings_glyph(self) -> None:
         """Set settings icon."""
@@ -753,7 +944,7 @@ class MainWindow(QMainWindow):
     <strong>참고:</strong> 한글 자동화는 Windows 환경에서만 작동합니다. macOS/Linux에서는 스크립트 편집 기능만 사용 가능합니다.
 </div>
 """
-        msg = _create_styled_dialog(self, "설정", settings_content, 550)
+        msg = _create_styled_dialog(self, "설정", settings_content, 550, dark_mode=self.dark_mode)
         msg.exec()
 
     def _show_ai_generate_dialog(self) -> None:
@@ -810,28 +1001,131 @@ class MainWindow(QMainWindow):
             self._optimize_script_with_ai(text)
 
     def _get_text_input(self, title: str, prompt: str) -> tuple[str, bool]:
-        """Get text input from user via dialog."""
-        msg = QMessageBox(self)
-        msg.setWindowTitle(title)
-        msg.setText(prompt)
-        msg.setStandardButtons(QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel)
+        """Get text input from user via custom styled dialog with buttons inside form."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle(title)
+        dialog.setModal(True)
         
-        # Create input field
+        # Set dialog background color
+        dialog.setStyleSheet("""
+            QDialog {
+                background-color: %s;
+            }
+        """ % ("#000000" if self.dark_mode else "#ffffff"))
+        
+        # Create main layout
+        main_layout = QVBoxLayout(dialog)
+        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout.setSpacing(20)
+        
+        # Centered description label
+        desc_label = QLabel(prompt)
+        desc_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        desc_label.setWordWrap(True)
+        desc_label.setStyleSheet("""
+            QLabel {
+                color: #e8e8e8;
+                font-size: 13px;
+                line-height: 1.6;
+            }
+        """ if self.dark_mode else """
+            QLabel {
+                color: #2c2c2c;
+                font-size: 13px;
+                line-height: 1.6;
+            }
+        """)
+        
+        main_layout.addWidget(desc_label)
+        
+        # Create input container with buttons inside
+        input_container = QWidget()
+        input_container.setObjectName("input-container")
+        input_container.setStyleSheet("""
+            QWidget#input-container {
+                background-color: %s;
+                border: 1px solid %s;
+                border-radius: 12px;
+            }
+        """ % (
+            "#1a1a1a" if self.dark_mode else "#f3f4f6",
+            "#4a4a4a" if self.dark_mode else "#d1d5db"
+        ))
+        input_layout = QVBoxLayout(input_container)
+        input_layout.setContentsMargins(16, 16, 16, 16)
+        input_layout.setSpacing(12)
+        
+        # Styled input field to match main page
         input_field = QTextEdit()
-        input_field.setMinimumHeight(100)
+        input_field.setObjectName("script-editor")
+        input_field.setMinimumHeight(120)
         input_field.setMinimumWidth(400)
+        input_field.setMaximumHeight(200)
+        input_field.setPlaceholderText("여기에 입력하세요")
         
-        layout = msg.layout()
-        if layout:
-            layout.addWidget(input_field)
+        input_layout.addWidget(input_field)
         
-        ok = msg.exec() == QMessageBox.StandardButton.Ok
-        return input_field.toPlainText(), ok
+        # Button row at bottom right (inside input form)
+        button_row = QHBoxLayout()
+        button_row.setContentsMargins(0, 0, 0, 0)
+        button_row.setSpacing(12)
+        button_row.addStretch()
+        
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setObjectName("secondary-button")
+        cancel_btn.setMinimumWidth(80)
+        cancel_btn.setMaximumWidth(100)
+        cancel_btn.setMinimumHeight(36)
+        cancel_btn.setStyleSheet(
+            "background: transparent; border: none; font-weight: bold; padding: 8px 14px;"
+        )
+        
+        ok_btn = QPushButton("OK")
+        ok_btn.setObjectName("primary-action")
+        ok_btn.setMaximumWidth(80)
+        ok_btn.setMinimumHeight(32)
+        
+        button_row.addWidget(cancel_btn)
+        button_row.addWidget(ok_btn)
+        
+        input_layout.addLayout(button_row)
+        
+        main_layout.addWidget(input_container)
+        
+        # Apply theme to text editor
+        theme_name = "dark" if self.dark_mode else "light"
+        theme_qss = _load_theme(theme_name)
+        input_field.setStyleSheet(theme_qss)
+        
+        # Handle button clicks
+        ok_clicked = False
+        def on_ok():
+            nonlocal ok_clicked
+            print("[Dialog] OK button clicked!")
+            ok_clicked = True
+            dialog.accept()
+        
+        def on_cancel():
+            nonlocal ok_clicked
+            print("[Dialog] Cancel button clicked!")
+            ok_clicked = False
+            dialog.reject()
+        
+        ok_btn.clicked.connect(on_ok)
+        cancel_btn.clicked.connect(on_cancel)
+        
+        print("[Dialog] Showing dialog...")
+        result = dialog.exec()
+        print(f"[Dialog] Dialog closed. Result: {result}, OK clicked: {ok_clicked}")
+        return input_field.toPlainText(), ok_clicked
 
     def _generate_script_with_ai(self, description: str) -> None:
         """Generate script using ChatGPT API."""
+        print("[MainWindow] _generate_script_with_ai called")
         self._append_log("🤖 AI가 스크립트를 생성하는 중...")
         self.run_button.setEnabled(False)
+        self.ai_generate_button.setEnabled(False)
+        self.ai_optimize_button.setEnabled(False)
         
         # Get available functions context
         context = """
@@ -843,35 +1137,93 @@ class MainWindow(QMainWindow):
 - insert_image(image_path): 이미지 삽입
 """
         
-        generated_code = self.chatgpt.generate_script(description, context)
+        # Create worker and thread
+        print("[MainWindow] Creating QThread and AIWorker...")
+        self.ai_thread = QThread()
+        self.ai_worker = AIWorker(self.chatgpt, "generate", description=description, context=context)
+        self.ai_worker.moveToThread(self.ai_thread)
+        print("[MainWindow] Worker moved to thread")
         
-        if generated_code:
-            self.script_edit.setPlainText(generated_code)
-            self._append_log("✅ 스크립트 생성 완료!")
-            self._show_info_dialog("생성 완료", "AI가 스크립트를 생성했습니다.\n확인하고 실행해주세요.")
-        else:
-            self._append_log("❌ 스크립트 생성 실패")
-            self._show_error_dialog("스크립트 생성 중 오류가 발생했습니다.\nAPI 키를 확인해주세요.")
+        # Connect signals
+        print("[MainWindow] Connecting signals...")
+        self.ai_thread.started.connect(self.ai_worker.run)
+        self.ai_worker.thought.connect(lambda msg: self._append_log(f"💭 {msg}"))
+        self.ai_worker.finished.connect(self._on_generate_finished)
+        self.ai_worker.error.connect(self._on_generate_error)
+        self.ai_worker.finished.connect(self.ai_thread.quit)
+        self.ai_worker.error.connect(self.ai_thread.quit)
+        self.ai_thread.finished.connect(self.ai_thread.deleteLater)
+        print("[MainWindow] Signals connected")
         
+        # Start the thread
+        print("[MainWindow] Starting thread...")
+        self.ai_thread.start()
+        print("[MainWindow] Thread started!")
+    
+    def _on_generate_finished(self, generated_code: str) -> None:
+        """Handle successful script generation."""
+        self.script_edit.setPlainText(generated_code)
+        self._append_log("✅ 스크립트 생성 완료!")
         self.run_button.setEnabled(True)
+        self.ai_generate_button.setEnabled(True)
+        self.ai_optimize_button.setEnabled(True)
+    
+    def _on_generate_error(self, error_msg: str) -> None:
+        """Handle script generation error."""
+        self._append_log(f"❌ 스크립트 생성 실패: {error_msg}")
+        self._show_error_dialog(f"스크립트 생성 중 오류가 발생했습니다.\n\n{error_msg}")
+        self.run_button.setEnabled(True)
+        self.ai_generate_button.setEnabled(True)
+        self.ai_optimize_button.setEnabled(True)
 
     def _optimize_script_with_ai(self, feedback: str) -> None:
         """Optimize current script using ChatGPT API."""
+        print("[MainWindow] _optimize_script_with_ai called")
         self._append_log("✨ AI가 스크립트를 최적화하는 중...")
         self.run_button.setEnabled(False)
+        self.ai_generate_button.setEnabled(False)
+        self.ai_optimize_button.setEnabled(False)
         
         current_script = self.script_edit.toPlainText()
-        optimized_code = self.chatgpt.optimize_script(current_script, feedback)
         
-        if optimized_code:
-            self.script_edit.setPlainText(optimized_code)
-            self._append_log("✅ 스크립트 최적화 완료!")
-            self._show_info_dialog("최적화 완료", "AI가 스크립트를 최적화했습니다.")
-        else:
-            self._append_log("❌ 스크립트 최적화 실패")
-            self._show_error_dialog("스크립트 최적화 중 오류가 발생했습니다.\nAPI 키를 확인해주세요.")
+        # Create worker and thread
+        print("[MainWindow] Creating QThread and AIWorker...")
+        self.ai_thread = QThread()
+        self.ai_worker = AIWorker(self.chatgpt, "optimize", script=current_script, feedback=feedback)
+        self.ai_worker.moveToThread(self.ai_thread)
+        print("[MainWindow] Worker moved to thread")
         
+        # Connect signals
+        print("[MainWindow] Connecting signals...")
+        self.ai_thread.started.connect(self.ai_worker.run)
+        self.ai_worker.thought.connect(lambda msg: self._append_log(f"💭 {msg}"))
+        self.ai_worker.finished.connect(self._on_optimize_finished)
+        self.ai_worker.error.connect(self._on_optimize_error)
+        self.ai_worker.finished.connect(self.ai_thread.quit)
+        self.ai_worker.error.connect(self.ai_thread.quit)
+        self.ai_thread.finished.connect(self.ai_thread.deleteLater)
+        print("[MainWindow] Signals connected")
+        
+        # Start the thread
+        print("[MainWindow] Starting thread...")
+        self.ai_thread.start()
+        print("[MainWindow] Thread started!")
+    
+    def _on_optimize_finished(self, optimized_code: str) -> None:
+        """Handle successful script optimization."""
+        self.script_edit.setPlainText(optimized_code)
+        self._append_log("✅ 스크립트 최적화 완료!")
         self.run_button.setEnabled(True)
+        self.ai_generate_button.setEnabled(True)
+        self.ai_optimize_button.setEnabled(True)
+    
+    def _on_optimize_error(self, error_msg: str) -> None:
+        """Handle script optimization error."""
+        self._append_log(f"❌ 스크립트 최적화 실패: {error_msg}")
+        self._show_error_dialog(f"스크립트 최적화 중 오류가 발생했습니다.\n\n{error_msg}")
+        self.run_button.setEnabled(True)
+        self.ai_generate_button.setEnabled(True)
+        self.ai_optimize_button.setEnabled(True)
 
 
 def run_app() -> None:

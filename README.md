@@ -41,9 +41,12 @@ cd node_eqn
 npm install
 cd ..
 
-# (선택) Tesseract / Poppler 경로 설정
-setx TESSERACT_CMD "C:\Program Files\Tesseract-OCR\tesseract.exe"
-setx POPPLER_PATH "C:\tools\poppler-24.07.0\Library\bin"
+# 환경 변수 설정
+cp .env.example .env
+# .env 파일을 열고 아래 항목들을 수정하세요:
+#   - TESSERACT_CMD: tesseract.exe 경로
+#   - POPPLER_PATH: poppler bin 폴더 경로
+#   - 기타 필요한 설정값
 ```
 
 > ⚠️ 한글과 pyhwpx는 Windows/한글 환경에서만 동작합니다. 다른 OS에서는 GUI는 뜨지만 한글 자동화가 실패합니다.

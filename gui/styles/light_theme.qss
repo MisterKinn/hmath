@@ -28,8 +28,8 @@ QToolButton#pin-button:hover {
 }
 
 QToolButton#pin-button:checked {
-    color: #10a37f;
-    background-color: #e8f5f0;
+    color: #5377f6;
+    background-color: #ede6f8;
 }
 
 #app-title {
@@ -61,7 +61,7 @@ QToolButton#pin-button:checked {
 
 #template-btn:hover {
     background-color: #ececf1;
-    border-color: #10a37f;
+    border-color: #5377f6;
 }
 
 QPushButton#help-button {
@@ -76,18 +76,24 @@ QPushButton#help-button {
 
 QPushButton#help-button:hover {
     background-color: #ececf1;
-    border-color: #10a37f;
+    border-color: #5377f6;
 }
 
 #input-container {
     background-color: #ffffff;
 }
 
-QTextEdit#script-editor {
+#script-input-container {
     background-color: #f3f4f6;
     border: 1px solid #d1d5db;
     border-radius: 12px;
-    padding: 14px;
+}
+
+QTextEdit#script-editor {
+    background-color: transparent;
+    border: none;
+    border-radius: 0px;
+    padding: 0px;
     color: #2c2c2c;
     font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
     font-size: 13px;
@@ -95,12 +101,12 @@ QTextEdit#script-editor {
 }
 
 QTextEdit#script-editor:focus {
-    border: 2px solid #10a37f;
-    padding: 13px;
+    border: none;
+    padding: 0px;
 }
 
 QPushButton#primary-action {
-    background-color: #10a37f;
+    background-color: #5377f6;
     color: #ffffff;
     border: none;
     border-radius: 8px;
@@ -110,11 +116,11 @@ QPushButton#primary-action {
 }
 
 QPushButton#primary-action:hover {
-    background-color: #0d8659;
+    background-color: #3e5fc7;
 }
 
 QPushButton#primary-action:pressed {
-    background-color: #0a6f4f;
+    background-color: #2e47a0;
 }
 
 QPushButton#primary-action:disabled {
@@ -132,11 +138,34 @@ QPushButton#primary-action:disabled {
 }
 
 #log-output:focus {
-    border: 2px solid #10a37f;
+    border: 2px solid #5377f6;
     padding: 11px;
 }
 
+QPushButton#upload-button {
+    background-color: transparent;
+    border: none;
+    border-radius: 8px;
+    padding: 0px;
+    color: #666666;
+    font-size: 18px;
+    font-weight: 500;
+    min-width: 44px;
+    min-height: 44px;
+    max-width: 44px;
+    max-height: 44px;
+}
+
+QPushButton#upload-button:hover {
+    background-color: #f0f0f0;
+    border: none;
+}
+
+QPushButton#upload-button:pressed {
+    background-color: #e5e7eb;
+}
 #success-indicator {
-    color: #10a37f;
+    color: #5377f6;
     font-size: 24px;
 }
+
