@@ -321,6 +321,7 @@ class MainWindow(QMainWindow):
         self.run_button.setObjectName("primary-action")
         self.run_button.setMaximumWidth(140)
         self.run_button.setMinimumHeight(44)
+        self.run_button.setToolTip("스크립트를 한글에서 실행합니다 (Ctrl+Enter)")
         self.run_button.clicked.connect(self._handle_run_clicked)
         bottom_row.addWidget(self.run_button)
         
@@ -360,10 +361,11 @@ class MainWindow(QMainWindow):
         
         layout.addStretch()
         
-        self.howto_button = QPushButton("💡 How to use")
+        self.howto_button = QPushButton("💡 도움말")
         self.howto_button.setObjectName("help-button")
         self.howto_button.setMaximumWidth(140)
         self.howto_button.setMinimumHeight(36)
+        self.howto_button.setToolTip("프로그램 사용 방법과 함수 가이드를 제공합니다")
         self.howto_button.clicked.connect(self._show_howto)
         layout.addWidget(self.howto_button)
         
@@ -371,20 +373,23 @@ class MainWindow(QMainWindow):
         self.latex_button.setObjectName("help-button")
         self.latex_button.setMaximumWidth(140)
         self.latex_button.setMinimumHeight(36)
+        self.latex_button.setToolTip("LaTeX 수식 문법 가이드를 제공합니다")
         self.latex_button.clicked.connect(self._show_latex_helper)
         layout.addWidget(self.latex_button)
         
-        self.ai_generate_button = QPushButton("🤖 AI Generate")
+        self.ai_generate_button = QPushButton("💻 AI 생성")
         self.ai_generate_button.setObjectName("help-button")
         self.ai_generate_button.setMaximumWidth(140)
         self.ai_generate_button.setMinimumHeight(36)
+        self.ai_generate_button.setToolTip("AI가 스크립트를 생성합니다")
         self.ai_generate_button.clicked.connect(self._show_ai_generate_dialog)
         layout.addWidget(self.ai_generate_button)
         
-        self.ai_optimize_button = QPushButton("✨ AI Optimize")
+        self.ai_optimize_button = QPushButton("✨ AI 최적화")
         self.ai_optimize_button.setObjectName("help-button")
         self.ai_optimize_button.setMaximumWidth(140)
         self.ai_optimize_button.setMinimumHeight(36)
+        self.ai_optimize_button.setToolTip("AI가 스크립트를 최적화합니다")
         self.ai_optimize_button.clicked.connect(self._show_ai_optimize_dialog)
         layout.addWidget(self.ai_optimize_button)
         
@@ -962,10 +967,10 @@ class MainWindow(QMainWindow):
 
         # Use a simple text input via QMessageBox
         text, ok = self._get_text_input(
-            "🤖 AI Script Generator",
-            "스크립트 생성을 위한 설명을 입력하세요:\n\n"
-            "예: '처음에 \"수학 문제\"라는 제목을 입력하고, '\n"
-            "'그 아래에 이차방정식 공식을 LaTeX로 삽입해주세요'"
+            "💻 AI 스크립트 생성",
+            "스크립트 생성을 위한 설명을 입력하세요\n\n"
+            "예) 처음에 \"수학 문제\"라는 제목을 입력하고,\n"
+            "'그 아래에 이차방정식 공식을 삽입하는 코드를 작성해줘."
         )
         
         if ok and text.strip():
@@ -976,11 +981,7 @@ class MainWindow(QMainWindow):
         if not self.chatgpt.is_available():
             self._show_error_dialog(
                 "ChatGPT API를 사용할 수 없습니다.\n\n"
-                "설정 방법:\n"
-                "1. OpenAI 계정 생성 (https://openai.com)\n"
-                "2. API 키 발급\n"
-                "3. OPENAI_API_KEY 환경변수 설정\n"
-                "4. 앱 재시작"
+                "자세한 사항은 개발진에게 문의해주세요."
             )
             return
 
@@ -990,11 +991,11 @@ class MainWindow(QMainWindow):
             return
 
         text, ok = self._get_text_input(
-            "✨ AI Script Optimizer",
-            "최적화 요청사항을 입력하세요 (선택사항):\n\n"
-            "예: '코드를 더 간결하게 만들어주세요'\n"
-            "또는: '에러 처리를 추가해주세요'\n\n"
-            "(비워두면 기본 최적화가 진행됩니다)"
+            "✨ AI 스크립트 최적화",
+            "최적화 요청사항을 입력하세요\n\n"
+            "예) '코드를 더 간결하게 만들어주세요'\n"
+            "'오류 처리를 추가해주세요'\n\n"
+            "(비워두면 기본적인 최적화가 진행됩니다)"
         )
         
         if ok:

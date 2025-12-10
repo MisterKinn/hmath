@@ -51,6 +51,24 @@ cp .env.example .env
 
 > ⚠️ 한글과 pyhwpx는 Windows/한글 환경에서만 동작합니다. 다른 OS에서는 GUI는 뜨지만 한글 자동화가 실패합니다.
 
+## 환경 변수 설정
+
+이 프로젝트는 `.env` 파일을 사용하여 민감한 정보(API 키, 경로 등)를 관리합니다.
+
+### 첫 실행 시 설정
+
+1. `.env.example`을 복사하여 `.env` 파일을 생성합니다:
+   ```bash
+   cp .env.example .env
+   ```
+
+2. `.env` 파일을 열고 다음 항목들을 수정합니다:
+   - `OPENAI_API_KEY`: [OpenAI 플랫폼](https://platform.openai.com/account/api-keys)에서 발급받은 API 키
+   - `TESSERACT_CMD`: tesseract.exe의 전체 경로
+   - `POPPLER_PATH`: poppler bin 폴더의 전체 경로
+
+3. `.env` 파일은 **절대 git에 커밋하지 마세요**. `.gitignore`에 이미 등록되어 있습니다.
+
 ## 실행 방법
 
 ```powershell
@@ -58,7 +76,7 @@ python -m gui.app
 ```
 
 1. **Hancom 한글**을 먼저 실행하고, 작업할 문서를 열어 커서를 원하는 위치에 둡니다.
-2. 앱을 실행하면 “AMEX AI Script Console” 창이 열립니다.
+2. 앱을 실행하면 "AMEX AI Script Console" 창이 열립니다.
 3. `hwp` 객체(pyhwpx.Hwp)나 제공된 헬퍼(`insert_text`, `insert_paragraph`, `insert_image`, `insert_equation`)를 이용해 파이썬 코드를 작성하고 **실행** 버튼을 누르면 현재 문서에 즉시 반영됩니다.
 
 예시 스크립트:
