@@ -944,9 +944,9 @@ class MainWindow(QMainWindow):
         """Handle photo upload button click."""
         file_path, _ = QFileDialog.getOpenFileName(
             self,
-            "사진 선택",
+            "파일 선택",
             "",
-            "Image Files (*.png *.jpg *.jpeg *.bmp);;All Files (*)"
+            "All Files (*)"
         )
         if file_path:
             # Insert image path reference into script
@@ -960,7 +960,7 @@ class MainWindow(QMainWindow):
             self,
             "파일 또는 이미지 선택",
             "",
-            "Image Files (*.png *.jpg *.jpeg *.bmp);;All Files (*)"
+            "All Files (*)"
         )
         if file_path:
             # Insert file path reference into script
