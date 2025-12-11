@@ -211,7 +211,7 @@ body.dark-mode code {
 }
 
 .note::before {
-    content: "💡 ";
+    content: "[?] ";
     font-size: 16px;
 }
 
@@ -225,7 +225,7 @@ body.dark-mode code {
 }
 
 .help-text::before {
-    content: "💡 ";
+    content: "[?] ";
     font-size: 14px;
 }
 
@@ -346,7 +346,7 @@ body.dark-mode .info-box {
 }
 
 .info-box::before {
-    content: "ℹ️ ";
+    content: "[i] ";
     font-size: 16px;
 }
 

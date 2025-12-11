@@ -57,6 +57,7 @@ QToolButton#pin-button:checked {
     color: #2c2c2c;
     font-size: 13px;
     font-weight: 500;
+    qproperty-iconSize: 16px 16px;
 }
 
 #template-btn:hover {
@@ -65,18 +66,24 @@ QToolButton#pin-button:checked {
 }
 
 QPushButton#help-button {
-    background-color: #f7f7f8;
-    border: 1px solid #d1d5db;
-    border-radius: 8px;
-    padding: 6px 12px;
-    color: #2c2c2c;
+    background-color: #f3f6ff;
+    border: 1px solid #d6ddf7;
+    border-radius: 10px;
+    padding: 8px 14px;
+    color: #1f2a44;
     font-size: 13px;
-    font-weight: 500;
+    font-weight: 600;
+    qproperty-iconSize: 20px 20px;
 }
 
 QPushButton#help-button:hover {
-    background-color: #ececf1;
-    border-color: #5377f6;
+    background-color: #e5ecff;
+    border-color: #5c7cf7;
+}
+
+QPushButton#help-button:pressed {
+    background-color: #d9e3ff;
+    border-color: #4c69d7;
 }
 
 #input-container {
@@ -163,6 +170,16 @@ QPushButton#upload-button:hover {
 
 QPushButton#upload-button:pressed {
     background-color: #e5e7eb;
+}
+
+QPushButton#help-button {
+    background-color: #f7f7f8;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    padding: 6px 12px;
+    color: #2c2c2c;
+    font-size: 13px;
+    font-weight: 500;
 }
 #success-indicator {
     color: #5377f6;

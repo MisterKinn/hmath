@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import platform
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import Qt, Signal, QThread, QObject, QSize, QTimer, QPropertyAnimation, QEasingCurve
+from PySide6.QtCore import Qt, Signal, QThread, QObject, QSize, QTimer, QPropertyAnimation, QEasingCurve, QPoint
 from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
@@ -23,6 +24,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QGridLayout,
     QFileDialog,
+    QMenu,
 )
 
 from backend.hwp.hwp_controller import HwpController, HwpControllerError
@@ -103,7 +105,7 @@ def _load_theme(theme_name: str) -> str:
         return qss_path.read_text(encoding='utf-8')
     return ""
 
-def _create_styled_dialog(parent, title: str, content: str, min_width: int = 500, min_height: int = 0, dark_mode: bool = False) -> QMessageBox:
+def _create_styled_dialog(parent, title: str, content: str, min_width: int = 500, min_height: int = 0, dark_mode: bool = False, icon_path: str | None = None) -> QMessageBox:
     """Create a styled dialog with enhanced OK button."""
     css = _load_dialog_css()
     dark_class = "dark-mode" if dark_mode else ""
@@ -113,7 +115,16 @@ def _create_styled_dialog(parent, title: str, content: str, min_width: int = 500
     msg.setWindowTitle(title)
     msg.setTextFormat(Qt.TextFormat.RichText)
     msg.setText(full_html)
-    msg.setIcon(QMessageBox.Icon.NoIcon)
+    if icon_path:
+        msg.setIconPixmap(QPixmap(icon_path).scaled(32, 32, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+    if icon_path:
+        pix = QPixmap(icon_path)
+        if not pix.isNull():
+            msg.setIconPixmap(pix.scaled(48, 48, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+        else:
+            msg.setIcon(QMessageBox.Icon.NoIcon)
+    else:
+        msg.setIcon(QMessageBox.Icon.NoIcon)
     msg.setStandardButtons(QMessageBox.StandardButton.Ok)
     
     # Apply QSS styling to the OK button
@@ -153,27 +164,36 @@ insert_hwpeqn("E = m c ^{2}", font_size_pt=12.0, eq_font_name="HYhwpEQ")
 # Template library
 TEMPLATES = {
     "텍스트": {
-        "icon": "📝",
-        "code": 'insert_text("여기에 텍스트를 입력하세요.\\r")\ninsert_paragraph()'
+        "icon_key": "write_icon",
+        "fallback": "[T]",
+        "use_theme": True,
+        "code": 'insert_text("여기에 텍스트를 입력하세요.\r")\ninsert_paragraph()'
     },
     "벡터": {
-        "icon": "🎯",
+        "icon_key": "vector_icon",
+        "fallback": "[V]",
+        "use_theme": True,
         "code": 'insert_equation(r"\\vec{a} = \\begin{pmatrix} a_1 \\\\ a_2 \\\\ a_3 \\end{pmatrix}", font_size_pt=14.0)'
     },
     "행렬": {
-        "icon": "▦",
+        "icon_key": "matrix_icon",
+        "fallback": "🔢",
+        "use_theme": True,
         "code": 'insert_equation(r"A = \\begin{bmatrix} a & b \\\\ c & d \\end{bmatrix}", font_size_pt=14.0)'
     },
     "시그마": {
-        "icon": "Σ",
+        "icon_key": "",
+        "fallback": "Σ",
         "code": 'insert_equation(r"\\sum_{i=1}^{n} i = \\frac{n(n+1)}{2}", font_size_pt=14.0)'
     },
     "미분": {
-        "icon": "∆",
+        "icon_key": "",
+        "fallback": "∂",
         "code": 'insert_equation(r"\\frac{d}{dx}f(x) = \\lim_{h \\to 0} \\frac{f(x+h)-f(x)}{h}", font_size_pt=13.0)'
     },
     "적분": {
-        "icon": "∫",
+        "icon_key": "",
+        "fallback": "∫",
         "code": 'insert_equation(r"\\int_{a}^{b} f(x) dx = F(b) - F(a)", font_size_pt=14.0)'
     }
 }
@@ -213,24 +233,82 @@ class MainWindow(QMainWindow):
         self._worker: Optional[ScriptWorker] = None
         self.dark_mode = True
         self.chatgpt = ChatGPTHelper()
+        self.selected_files: list[str] = []  # Track selected files/images
+        self._last_hwp_filename = "한글 문서"  # Track last known HWP filename
+        self._hwp_detection_timer = QTimer()
+        self._hwp_detection_timer.timeout.connect(self._update_hwp_filename)
         self._build_ui()
         self._apply_styles()
+        self._hwp_detection_timer.start(500)  # Check every 500ms
 
     def _apply_button_icon(
         self,
-        button: QPushButton,
-        icon_filename: str,
+        button,
+        icon_key: str,
         fallback_text: str,
         icon_size: QSize = QSize(22, 22),
+        preserve_text: bool = False,
     ) -> None:
         """Set an icon on a button if the asset exists, otherwise fall back to text."""
-        icon_path = Path(__file__).resolve().parents[1] / "public" / "img" / icon_filename
-        if icon_path.exists():
+        icon_path = self._get_icon_path(icon_key)
+        button.setIcon(QIcon())
+        if icon_path:
             button.setIcon(QIcon(str(icon_path)))
             button.setIconSize(icon_size)
-            button.setText("")
+            if not preserve_text:
+                button.setText("")
         else:
             button.setText(fallback_text)
+
+    def _apply_button_icon_themed(
+        self,
+        button,
+        icon_key: str,
+        fallback_text: str,
+        icon_size: QSize = QSize(22, 22),
+        preserve_text: bool = False,
+    ) -> None:
+        """Set a theme-aware icon on a button."""
+        icon_path = self._get_icon_path(icon_key, use_theme=True)
+        button.setIcon(QIcon())
+        if icon_path:
+            button.setIcon(QIcon(str(icon_path)))
+            button.setIconSize(icon_size)
+            if not preserve_text:
+                button.setText("")
+        else:
+            if not preserve_text:
+                button.setText(fallback_text)
+
+    def _get_icon_path(self, icon_key: str, use_theme: bool = True) -> Path | None:
+        """Return themed icon path if available."""
+        assets_dir = Path(__file__).resolve().parents[1] / "public" / "img"
+        theme_suffix = "dark" if self.dark_mode else "light"
+        
+        if use_theme:
+            candidates = [
+                f"{icon_key}-{theme_suffix}.svg",
+                f"{icon_key}_{theme_suffix}.svg",
+                f"{icon_key}.svg",
+                f"{icon_key}-{theme_suffix}.png",
+                f"{icon_key}_{theme_suffix}.png",
+                f"{icon_key}.png",
+            ]
+        else:
+            candidates = [
+                f"{icon_key}.png",
+                f"{icon_key}.svg",
+            ]
+        
+        for filename in candidates:
+            icon_path = assets_dir / filename
+            if icon_path.exists():
+                return icon_path
+        return None
+
+    def _get_icon_path_str(self, icon_key: str) -> str | None:
+        path = self._get_icon_path(icon_key)
+        return str(path) if path else None
 
     def _build_ui(self) -> None:
         central = QWidget(self)
@@ -261,15 +339,26 @@ class MainWindow(QMainWindow):
         input_layout.setContentsMargins(40, 24, 40, 40)
         input_layout.setSpacing(20)
         
-        # Replace log_output QTextEdit with output_text QLabel
-        self.output_text = QLabel()
-        self.output_text.setObjectName("output-text")
-        self.output_text.setText("")
-        self.output_text.setStyleSheet("font-size: 15px; color: #5377f6; background: transparent; padding: 8px;")
-        self.output_text.setMinimumHeight(32)
-        self.output_text.setMaximumHeight(32)
-        self.output_text.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        input_layout.addWidget(self.output_text)
+        # Restore log_output QTextEdit for scrollable multi-line output
+        self.log_output = QTextEdit()
+        self.log_output.setObjectName("log-output")
+        self.log_output.setReadOnly(True)
+        self.log_output.setMinimumHeight(60)
+        self.log_output.setMaximumHeight(100)
+        # Custom context menu for log output
+        self.log_output.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.log_output.customContextMenuRequested.connect(self._show_log_context_menu)
+        input_layout.addWidget(self.log_output)
+        
+        # Image preview area (initially hidden)
+        self.image_preview_container = QWidget()
+        self.image_preview_container.setObjectName("image-preview-container")
+        self.image_preview_layout = QHBoxLayout(self.image_preview_container)
+        self.image_preview_layout.setContentsMargins(0, 0, 0, 8)
+        self.image_preview_layout.setSpacing(8)
+        self.image_preview_layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        self.image_preview_container.hide()
+        input_layout.addWidget(self.image_preview_container)
         
         # Script editor container with buttons inside
         script_container = QWidget()
@@ -285,42 +374,91 @@ class MainWindow(QMainWindow):
         self.script_edit.setPlainText(DEFAULT_SCRIPT.strip())
         self.script_edit.setMaximumHeight(220)
         self.script_edit.setMinimumHeight(160)
+        # Custom context menu in Korean
+        self.script_edit.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.script_edit.customContextMenuRequested.connect(self._show_editor_context_menu)
         
         script_layout.addWidget(self.script_edit)
         
-        # Bottom row with upload buttons on left and Run button on right (INSIDE script container)
+        # Bottom row with '+' button for files/images, AI selector, and Run button
         bottom_row = QHBoxLayout()
         bottom_row.setContentsMargins(0, 0, 0, 0)
         bottom_row.setSpacing(12)
         
-        # Left side: File and Photo upload buttons
-        self.file_btn = QPushButton()
-        self.file_btn.setObjectName("upload-button")
-        self.file_btn.setMaximumWidth(44)
-        self.file_btn.setMinimumWidth(44)
-        self.file_btn.setMinimumHeight(44)
-        self.file_btn.setToolTip("파일 선택")
-        self._apply_button_icon(self.file_btn, "file_icon.png", "📁", icon_size=QSize(22, 22))
-        self.file_btn.clicked.connect(self._handle_file_upload)
-        bottom_row.addWidget(self.file_btn)
+        # Left side: Combined file/image button
+        self.add_file_btn = QPushButton("+")
+        self.add_file_btn.setObjectName("upload-button")
+        self.add_file_btn.setMaximumWidth(40)
+        self.add_file_btn.setMinimumWidth(40)
+        self.add_file_btn.setMinimumHeight(48)
+        self.add_file_btn.setFont(QFont("Arial", 24, QFont.Weight.Bold))
+        self.add_file_btn.setToolTip("파일 또는 이미지 추가")
+        self.add_file_btn.clicked.connect(self._handle_add_file)
+        self.add_file_btn.setText("")
+        self.add_file_btn.setStyleSheet("font-size: 28px; font-weight: bold;")
+        self.add_file_btn.setStyleSheet("""
+            QToolTip {
+                font-size: 11px;
+                padding: 4px 8px;
+            }
+        """)
+        self._apply_button_icon(self.add_file_btn, "plus", "+", QSize(32, 32))
+        bottom_row.addWidget(self.add_file_btn)
         
-        self.photo_btn = QPushButton()
-        self.photo_btn.setObjectName("upload-button")
-        self.photo_btn.setMaximumWidth(44)
-        self.photo_btn.setMinimumWidth(44)
-        self.photo_btn.setMinimumHeight(44)
-        self.photo_btn.setToolTip("사진 선택")
-        self._apply_button_icon(self.photo_btn, "photo_icon.png", "🖼️", icon_size=QSize(60, 60))
-        self.photo_btn.clicked.connect(self._handle_photo_upload)
-        bottom_row.addWidget(self.photo_btn)
+        # AI selector button
+        self.ai_selector_btn = QPushButton("[AI]")
+        self.ai_selector_btn.setObjectName("upload-button")
+        self.ai_selector_btn.setMaximumWidth(44)
+        self.ai_selector_btn.setMinimumWidth(44)
+        self.ai_selector_btn.setMinimumHeight(44)
+        self.ai_selector_btn.setToolTip("AI 모델 선택")
+        self.ai_selector_btn.clicked.connect(self._show_ai_selector)
+        self._apply_button_icon(self.ai_selector_btn, "ai", "[AI]", QSize(28, 28))
+        bottom_row.addWidget(self.ai_selector_btn)
+
+        # Model label to the right of the flash/AI icon
+        self.model_label = QLabel("GPT-5-nano")
+        self.model_label.setObjectName("model-label")
+        self.model_label.setStyleSheet(
+            "font-size: 14px; font-weight: 600; color: #666;"
+            "background: transparent; padding: 0 6px; margin: 0;"
+        )
+        bottom_row.addWidget(self.model_label)
         
         bottom_row.addStretch()
         
-        # Right side: Run button
-        self.run_button = QPushButton("▶ Run")
+        # HWP filename display
+        self.hwp_filename_label = QLabel("한글 문서")
+        self.hwp_filename_label.setObjectName("hwp-filename")
+        self.hwp_filename_label.setStyleSheet("""
+            color: #666;
+            font-size: 13px;
+            font-weight: 500;
+            padding: 4px 12px;
+            background-color: rgba(128, 128, 128, 0.1);
+            border-radius: 6px;
+            margin-right: 12px;
+        """)
+        bottom_row.addWidget(self.hwp_filename_label)
+        
+        # Microphone button
+        self.mic_btn = QPushButton("[MIC]")
+        self.mic_btn.setObjectName("upload-button")
+        self.mic_btn.setMaximumWidth(44)
+        self.mic_btn.setMinimumWidth(44)
+        self.mic_btn.setMinimumHeight(44)
+        self.mic_btn.setToolTip("음성 입력")
+        self.mic_btn.clicked.connect(self._handle_voice_input)
+        self._apply_button_icon(self.mic_btn, "mic", "[MIC]", QSize(28, 28))
+        bottom_row.addWidget(self.mic_btn)
+        
+        # Right side: Run button (play icon)
+        self.run_button = QPushButton("▶")
         self.run_button.setObjectName("primary-action")
-        self.run_button.setMaximumWidth(140)
+        self.run_button.setMaximumWidth(60)
+        self.run_button.setMinimumWidth(60)
         self.run_button.setMinimumHeight(44)
+        self.run_button.setFont(QFont("Arial", 22, QFont.Weight.Bold))
         self.run_button.setToolTip("스크립트를 한글에서 실행합니다 (Ctrl+Enter)")
         self.run_button.clicked.connect(self._handle_run_clicked)
         bottom_row.addWidget(self.run_button)
@@ -342,13 +480,31 @@ class MainWindow(QMainWindow):
         lyt.setSpacing(8)
         lyt.setContentsMargins(0, 0, 0, 0)
         
+        # Title with logo
+        title_container = QWidget()
+        title_layout = QHBoxLayout(title_container)
+        title_layout.setContentsMargins(0, 0, 0, 0)
+        title_layout.setSpacing(12)
+        title_layout.addStretch()
+        
+        # Logo
+        self.logo_label = QLabel()
+        self.logo_label.setObjectName("app-logo")
+        self.logo_label.setStyleSheet("font-size: 36px; color: #5377f6;")
+        self._set_app_logo()
+        title_layout.addWidget(self.logo_label)
+        
+        # Title text
         title = QLabel("HMATH")
         title.setObjectName("app-title")
+        title_layout.addWidget(title)
+        
+        title_layout.addStretch()
         
         subtitle = QLabel("최고의 한글 수식 자동화 에이전트")
         subtitle.setObjectName("app-subtitle")
         
-        lyt.addWidget(title, alignment=Qt.AlignmentFlag.AlignCenter)
+        lyt.addWidget(title_container, alignment=Qt.AlignmentFlag.AlignCenter)
         lyt.addWidget(subtitle, alignment=Qt.AlignmentFlag.AlignCenter)
         return frame
 
@@ -361,39 +517,47 @@ class MainWindow(QMainWindow):
         
         layout.addStretch()
         
-        self.howto_button = QPushButton("💡 도움말")
+        self.howto_button = QPushButton("도움말")
         self.howto_button.setObjectName("help-button")
         self.howto_button.setMaximumWidth(140)
-        self.howto_button.setMinimumHeight(36)
+        self.howto_button.setFixedHeight(38)
         self.howto_button.setToolTip("프로그램 사용 방법과 함수 가이드를 제공합니다")
         self.howto_button.clicked.connect(self._show_howto)
+        self.howto_button.setText("도움말")
+        self._apply_button_icon(self.howto_button, "help", "[?]", QSize(20, 20), preserve_text=True)
         layout.addWidget(self.howto_button)
         
         self.latex_button = QPushButton("</> LaTeX")
         self.latex_button.setObjectName("help-button")
         self.latex_button.setMaximumWidth(140)
-        self.latex_button.setMinimumHeight(36)
+        self.latex_button.setFixedHeight(38)
         self.latex_button.setToolTip("LaTeX 수식 문법 가이드를 제공합니다")
         self.latex_button.clicked.connect(self._show_latex_helper)
         layout.addWidget(self.latex_button)
         
-        self.ai_generate_button = QPushButton("💻 AI 생성")
+        self.ai_generate_button = QPushButton("AI 생성")
         self.ai_generate_button.setObjectName("help-button")
         self.ai_generate_button.setMaximumWidth(140)
-        self.ai_generate_button.setMinimumHeight(36)
+        self.ai_generate_button.setFixedHeight(38)
         self.ai_generate_button.setToolTip("AI가 스크립트를 생성합니다")
         self.ai_generate_button.clicked.connect(self._show_ai_generate_dialog)
+        self.ai_generate_button.setText("AI 생성")
+        self._apply_button_icon(self.ai_generate_button, "generate", "[+]", QSize(20, 20), preserve_text=True)
         layout.addWidget(self.ai_generate_button)
         
-        self.ai_optimize_button = QPushButton("✨ AI 최적화")
+        self.ai_optimize_button = QPushButton("AI 최적화")
         self.ai_optimize_button.setObjectName("help-button")
         self.ai_optimize_button.setMaximumWidth(140)
-        self.ai_optimize_button.setMinimumHeight(36)
+        self.ai_optimize_button.setFixedHeight(38)
         self.ai_optimize_button.setToolTip("AI가 스크립트를 최적화합니다")
         self.ai_optimize_button.clicked.connect(self._show_ai_optimize_dialog)
+        self.ai_optimize_button.setText("AI 최적화")
+        self._apply_button_icon(self.ai_optimize_button, "optimize", "[*]", QSize(20, 20), preserve_text=True)
         layout.addWidget(self.ai_optimize_button)
         
         layout.addStretch()
+        # Apply distinct styling to help buttons based on theme
+        self._apply_help_button_style()
         return container
 
     def _build_templates(self) -> QWidget:
@@ -415,12 +579,35 @@ class MainWindow(QMainWindow):
         h_grid.setSpacing(12)
         h_grid.addStretch()
         
+        self.template_buttons: list[tuple[QPushButton, dict]] = []
         for name, template in TEMPLATES.items():
-            btn = QPushButton(f"{template['icon']} {name}")
-            btn.setObjectName("template-btn")
-            btn.setMaximumWidth(140)
-            btn.setMinimumHeight(44)
-            btn.clicked.connect(lambda checked, code=template["code"]: self._load_template(code))
+            icon_key = template.get("icon_key", "")
+            fallback = template.get("fallback", name[0])
+            
+            if icon_key:
+                btn = QPushButton()
+                btn.setObjectName("template-btn")
+                btn.setMaximumWidth(140)
+                btn.setMinimumHeight(44)
+                btn.clicked.connect(lambda checked, code=template["code"]: self._load_template(code))
+                btn.setStyleSheet("text-align: right; padding-right: 12px;")
+                use_theme = template.get("use_theme", False)
+                btn.setText(name)
+                if use_theme:
+                    self._apply_button_icon_themed(btn, icon_key, fallback, QSize(16, 16), preserve_text=True)
+                else:
+                    self._apply_button_icon(btn, icon_key, fallback, QSize(16, 16), preserve_text=True)
+            else:
+                btn = QPushButton(f"{fallback} {name}")
+                btn.setObjectName("template-btn")
+                btn.setMaximumWidth(140)
+                btn.setMinimumHeight(44)
+                btn.clicked.connect(lambda checked, code=template["code"]: self._load_template(code))
+                btn.setStyleSheet("text-align: right; padding-right: 12px;")
+            
+            template["label"] = name
+            template["fallback_display"] = fallback
+            self.template_buttons.append((btn, template))
             h_grid.addWidget(btn)
         
         h_grid.addStretch()
@@ -462,10 +649,8 @@ class MainWindow(QMainWindow):
         self.save_btn.setObjectName("pin-button")
         self.save_btn.setToolTip("스크립트 저장")
         self.save_btn.setAutoRaise(True)
-        self.save_btn.setText("💾")
-        font = self.save_btn.font()
-        font.setPointSize(24)
-        self.save_btn.setFont(font)
+        self.save_btn.setText("[S]")
+        self._apply_button_icon(self.save_btn, "save", "[S]", QSize(32, 32))
         self.save_btn.clicked.connect(self._save_script)
 
         # Load script button
@@ -473,10 +658,8 @@ class MainWindow(QMainWindow):
         self.load_btn.setObjectName("pin-button")
         self.load_btn.setToolTip("스크립트 불러오기")
         self.load_btn.setAutoRaise(True)
-        self.load_btn.setText("📂")
-        font = self.load_btn.font()
-        font.setPointSize(24)
-        self.load_btn.setFont(font)
+        self.load_btn.setText("[L]")
+        self._apply_button_icon(self.load_btn, "load", "[L]", QSize(32, 32))
         self.load_btn.clicked.connect(self._load_script)
 
         # Theme button
@@ -508,6 +691,192 @@ class MainWindow(QMainWindow):
         theme = "light" if not self.dark_mode else "dark"
         stylesheet = _load_theme(theme)
         self.setStyleSheet(stylesheet)
+        # Re-apply distinct styling for help buttons after loading theme
+        self._apply_help_button_style()
+
+    def _apply_help_button_style(self) -> None:
+        """Apply a distinct, elegant style for the four help buttons."""
+        if not hasattr(self, "howto_button"):
+            return
+
+        if self.dark_mode:
+            base_bg = "#182036"
+            hover_bg = "#202b45"
+            press_bg = "#1b2440"
+            border_color = "#3b4a6a"
+            hover_border = "#4b5d85"
+            press_border = "#35466b"
+            text_color = "#e8ecf8"
+        else:
+            base_bg = "#eef3ff"      # gentle blue tint
+            hover_bg = "#e3ebff"
+            press_bg = "#d8e1ff"
+            border_color = "#cad8ff"
+            hover_border = "#b9c9fb"
+            press_border = "#aebff8"
+            text_color = "#1c2d5a"
+
+        style = f"""
+        QPushButton {{
+            background-color: {base_bg};
+            color: {text_color};
+            border: 1px solid {border_color};
+            border-radius: 10px;
+            padding: 8px 14px;
+            font-weight: 600;
+            text-align: left;
+        }}
+        QPushButton:hover {{
+            background-color: {hover_bg};
+            border-color: {hover_border};
+        }}
+        QPushButton:pressed {{
+            background-color: {press_bg};
+            border-color: {press_border};
+        }}
+        """
+
+        for btn in (
+            getattr(self, "howto_button", None),
+            getattr(self, "latex_button", None),
+            getattr(self, "ai_generate_button", None),
+            getattr(self, "ai_optimize_button", None),
+        ):
+            if btn:
+                btn.setStyleSheet(style)
+
+    def _set_app_logo(self) -> None:
+        """Set main title logo based on theme."""
+        if hasattr(self, "logo_label"):
+            icon_path = self._get_icon_path("logo")
+            if icon_path:
+                pix = QPixmap(str(icon_path)).scaled(36, 36, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                self.logo_label.setPixmap(pix)
+                self.logo_label.setText("")
+            else:
+                self.logo_label.setPixmap(QPixmap())
+                self.logo_label.setText("[∑]")
+                self.logo_label.setStyleSheet("font-size: 36px; color: #5377f6;")
+
+    def _refresh_icons(self) -> None:
+        """Reapply themed icons after a theme change."""
+        self._apply_button_icon(self.add_file_btn, "plus", "+", QSize(32, 32))
+        self._apply_button_icon(self.ai_selector_btn, "ai", "[AI]", QSize(28, 28))
+        self._apply_button_icon(self.mic_btn, "mic", "[MIC]", QSize(28, 28))
+        self.howto_button.setText("도움말")
+        self._apply_button_icon(self.howto_button, "help", "[?]", QSize(20, 20), preserve_text=True)
+        self.ai_generate_button.setText("AI 생성")
+        self._apply_button_icon(self.ai_generate_button, "generate", "[+]", QSize(20, 20), preserve_text=True)
+        self.ai_optimize_button.setText("AI 최적화")
+        self._apply_button_icon(self.ai_optimize_button, "optimize", "[*]", QSize(20, 20), preserve_text=True)
+        # Ensure help buttons keep their distinct inline styling after icon refresh
+        self._apply_help_button_style()
+        self._apply_button_icon(self.save_btn, "save", "[S]", QSize(32, 32))
+        self._apply_button_icon(self.load_btn, "load", "[L]", QSize(32, 32))
+        self._set_theme_glyph(self.dark_mode)
+        self._set_settings_glyph()
+        if hasattr(self, "template_buttons"):
+            for btn, template in self.template_buttons:
+                icon_key = template.get("icon_key", "")
+                fallback = template.get("fallback_display", btn.text()[:1])
+                label = template.get("label", "")
+                use_theme = template.get("use_theme", False)
+                
+                if icon_key:
+                    btn.setText(label)
+                    if use_theme:
+                        self._apply_button_icon_themed(
+                            btn,
+                            icon_key,
+                            fallback,
+                            QSize(16, 16),
+                            preserve_text=True,
+                        )
+                    else:
+                        self._apply_button_icon(
+                            btn,
+                            icon_key,
+                            fallback,
+                            QSize(16, 16),
+                            preserve_text=True,
+                        )
+                else:
+                    btn.setText(f"{fallback} {label}")
+        self._set_app_logo()
+
+    def _show_editor_context_menu(self, pos) -> None:
+        """Custom right-click menu for the editor (Korean labels)."""
+        menu = QMenu(self)
+        menu.setStyleSheet(
+            """
+            QMenu {
+                background-color: rgba(40, 40, 40, 0.96);
+                color: #f4f4f4;
+                border: 1px solid #4a4a4a;
+                padding: 6px 4px;
+                border-radius: 8px;
+            }
+            QMenu::item {
+                padding: 6px 18px;
+                border-radius: 6px;
+            }
+            QMenu::item:selected {
+                background: #5377f6;
+                color: white;
+            }
+            """
+        )
+
+        actions = [
+            ("실행 취소", self.script_edit.undo),
+            ("다시 실행", self.script_edit.redo),
+            ("잘라내기", self.script_edit.cut),
+            ("복사", self.script_edit.copy),
+            ("붙여넣기", self.script_edit.paste),
+            ("모두 선택", self.script_edit.selectAll),
+            ("내용 지우기", self.script_edit.clear),
+        ]
+
+        for label, handler in actions:
+            act = menu.addAction(label)
+            act.triggered.connect(handler)
+
+        menu.exec(self.script_edit.mapToGlobal(pos))
+
+    def _show_log_context_menu(self, pos) -> None:
+        """Custom right-click menu for the log output (Korean labels)."""
+        menu = QMenu(self)
+        menu.setStyleSheet(
+            """
+            QMenu {
+                background-color: rgba(40, 40, 40, 0.96);
+                color: #f4f4f4;
+                border: 1px solid #4a4a4a;
+                padding: 6px 4px;
+                border-radius: 8px;
+            }
+            QMenu::item {
+                padding: 6px 18px;
+                border-radius: 6px;
+            }
+            QMenu::item:selected {
+                background: #5377f6;
+                color: white;
+            }
+            """
+        )
+
+        actions = [
+            ("잘라내기", self.log_output.cut),
+            ("복사", self.log_output.copy),
+            ("모두 선택", self.log_output.selectAll),
+        ]
+
+        for label, handler in actions:
+            act = menu.addAction(label)
+            act.triggered.connect(handler)
+
+        menu.exec(self.log_output.mapToGlobal(pos))
 
     def _handle_run_clicked(self) -> None:
         if self._worker and self._worker.isRunning():
@@ -585,10 +954,70 @@ class MainWindow(QMainWindow):
             current = self.script_edit.toPlainText()
             self.script_edit.setPlainText(current + "\n" + img_ref)
 
+    def _handle_add_file(self) -> None:
+        """Handle combined file/image upload button click."""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "파일 또는 이미지 선택",
+            "",
+            "Image Files (*.png *.jpg *.jpeg *.bmp);;All Files (*)"
+        )
+        if file_path:
+            # Insert file path reference into script
+            file_ref = f'insert_image("{file_path}")'
+            current = self.script_edit.toPlainText()
+            self.script_edit.setPlainText(current + "\n" + file_ref)
+            self._append_log(f"파일 추가됨: {Path(file_path).name}")
+            self._add_image_preview(file_path)
+            
+            # Update HWP filename if it's a document
+            filename = Path(file_path).name
+            if filename.lower().endswith(('.hwp', '.hwpx')):
+                self.hwp_filename_label.setText(filename)
+
+    def _add_image_preview(self, file_path: str) -> None:
+        """Add image preview thumbnail."""
+        try:
+            pixmap = QPixmap(file_path)
+            if not pixmap.isNull():
+                # Scale to higher-quality thumbnail size
+                scaled = pixmap.scaled(120, 120, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                
+                # Create preview label
+                preview_label = QLabel()
+                preview_label.setPixmap(scaled)
+                preview_label.setFixedSize(120, 120)
+                preview_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
+                preview_label.setStyleSheet("""
+                    border: 2px solid #ddd;
+                    border-radius: 8px;
+                    padding: 2px;
+                    background-color: white;
+                """)
+                
+                self.image_preview_layout.addWidget(preview_label, alignment=Qt.AlignmentFlag.AlignLeft)
+                self.image_preview_container.show()
+        except Exception as e:
+            print(f"Error adding image preview: {e}")
+
+    def _show_ai_selector(self) -> None:
+        """Show AI model selector dialog."""
+        # Placeholder for AI model selection
+        # TODO: Implement AI model dropdown/menu with options like GPT-4, GPT-3.5, etc.
+        # Suppress alert until feature is implemented
+        return
+
+    def _handle_voice_input(self) -> None:
+        """Handle microphone/voice input button click."""
+        # Placeholder for voice input functionality
+        # TODO: Implement speech-to-text integration with microphone library
+        # No alert for now to keep UX clean; future implementation will activate mic capture here.
+        return
+
     def _show_help_menu(self) -> None:
         """Show help menu dialog."""
         content = """
-<h2>📖 도움말</h2>
+<h2>도움말</h2>
 
 <div class="setting-section">
     <div class="setting-title">빠른 시작</div>
@@ -609,19 +1038,19 @@ class MainWindow(QMainWindow):
 <div class="setting-section">
     <div class="setting-title">주요 기능</div>
     <div class="setting-item">
-        <span class="setting-label">💾 스크립트 저장</span>
+        <span class="setting-label">스크립트 저장</span>
         <span class="setting-value">작성한 코드 저장</span>
     </div>
     <div class="setting-item">
-        <span class="setting-label">📂 스크립트 불러오기</span>
+        <span class="setting-label">스크립트 불러오기</span>
         <span class="setting-value">저장된 코드 불러오기</span>
     </div>
     <div class="setting-item">
-        <span class="setting-label">🌙 다크 모드</span>
+        <span class="setting-label">다크 모드</span>
         <span class="setting-value">테마 전환</span>
     </div>
     <div class="setting-item">
-        <span class="setting-label">⚙️ 설정</span>
+        <span class="setting-label">설정</span>
         <span class="setting-value">앱 정보 및 설정</span>
     </div>
 </div>
@@ -630,14 +1059,20 @@ class MainWindow(QMainWindow):
     <strong>문의사항:</strong> GitHub Issues를 통해 버그 리포트 및 기능 제안을 해주세요
 </div>
 """
-        msg = _create_styled_dialog(self, "도움말", content, 550, dark_mode=self.dark_mode)
+        msg = _create_styled_dialog(
+            self,
+            "도움말",
+            content,
+            550,
+            dark_mode=self.dark_mode,
+            icon_path=self._get_icon_path_str("help"),
+        )
         msg.exec()
 
     def _show_error_dialog(self, message: str) -> None:
         """Show elegant error dialog."""
         error_content = f"""
 <div class="error-container">
-    <span class="error-icon">⚠️</span>
     <span class="error-title">실행 오류가 발생했습니다</span>
     
     <div class="error-message">
@@ -649,14 +1084,20 @@ class MainWindow(QMainWindow):
     </div>
 </div>
 """
-        msg = _create_styled_dialog(self, "오류", error_content, 500, dark_mode=self.dark_mode)
+        msg = _create_styled_dialog(
+            self,
+            "오류",
+            error_content,
+            500,
+            dark_mode=self.dark_mode,
+            icon_path=self._get_icon_path_str("error"),
+        )
         msg.exec()
 
     def _show_info_dialog(self, title: str, message: str) -> None:
         """Show elegant info dialog."""
         info_content = f"""
 <div class="info-container">
-    <span class="info-icon">ℹ️</span>
     <span class="info-title">{title}</span>
     
     <div class="info-message">
@@ -664,7 +1105,14 @@ class MainWindow(QMainWindow):
     </div>
 </div>
 """
-        msg = _create_styled_dialog(self, title, info_content, 450, dark_mode=self.dark_mode)
+        msg = _create_styled_dialog(
+            self,
+            title,
+            info_content,
+            450,
+            dark_mode=self.dark_mode,
+            icon_path=self._get_icon_path_str("info"),
+        )
         msg.exec()
 
     def _handle_finished(self) -> None:
@@ -674,43 +1122,46 @@ class MainWindow(QMainWindow):
 
     def _show_success_animation(self) -> None:
         """Show success indicator animation."""
-        success = QLabel("✓")
+        success = QLabel("")
         success.setObjectName("success-indicator")
         success.setStyleSheet("color: #5377f6; font-size: 28px;")
         
         # Show briefly in the log area
-        self.output_text.setText("✓ 스크립트가 성공적으로 완료되었습니다!")
+        self.log_output.append("[V] 스크립트가 성공적으로 완료되었습니다!")
 
     def _toggle_theme(self, checked: bool) -> None:
         """Toggle between light and dark theme."""
         self.dark_mode = checked
-        self._set_theme_glyph(checked)
-        theme = "dark" if checked else "light"
-        stylesheet = _load_theme(theme)
-        self.setStyleSheet(stylesheet)
+        self._apply_styles()
+        self._refresh_icons()
 
     def _set_theme_glyph(self, active: bool) -> None:
         """Set theme toggle icon."""
-        font_name = _ensure_material_icon_font()
-        font = QFont(font_name)
-        font.setPointSize(24)
-        self.theme_btn.setFont(font)
-        glyph = "☀️" if active else "🌙"
-        self.theme_btn.setText(glyph)
+        self.theme_btn.setText("[o]")
+        if active:
+            self._apply_button_icon(self.theme_btn, "light", "[O]", QSize(32, 32))
+        else:
+            self._apply_button_icon(self.theme_btn, "moon", "[o]", QSize(32, 32))
 
     def _show_howto(self) -> None:
         """Show how to use dialog."""
-        howto_content = """
+        # Get icon paths
+        save_icon = self._get_icon_path_str("save") or ""
+        load_icon = self._get_icon_path_str("load") or ""
+        light_icon = self._get_icon_path_str("light") or ""
+        settings_icon = self._get_icon_path_str("settings") or ""
+        
+        howto_content = f"""
 <style>
-  .functions { margin-top: 12px; }
-  .func-item { display: flex; flex-direction: column; gap: 2px; margin-bottom: 10px; }
-  .func-item code { background: #f3f4f6; color: #111827; padding: 6px 8px; border-radius: 8px; display: inline-block; }
-  .dark-mode .func-item code { background: #1f2937; color: #e5e7eb; }
-  .func-item small { color: #666; }
-  .dark-mode .func-item small { color: #9ca3af; }
+  .functions {{ margin-top: 12px; }}
+  .func-item {{ display: flex; flex-direction: column; gap: 2px; margin-bottom: 10px; }}
+  .func-item code {{ background: #f3f4f6; color: #111827; padding: 6px 8px; border-radius: 8px; display: inline-block; }}
+  .dark-mode .func-item code {{ background: #1f2937; color: #e5e7eb; }}
+  .func-item small {{ color: #666; }}
+  .dark-mode .func-item small {{ color: #9ca3af; }}
 </style>
 
-<h2>🚀 HMATH AI 사용 가이드</h2>
+<h2>❓ HMATH AI 사용 가이드</h2>
 
 <div class="step">
     <strong>1. 한글 실행</strong><br>
@@ -733,7 +1184,7 @@ class MainWindow(QMainWindow):
 </div>
 
 <div class="functions">
-    <h3>📚 텍스트 작성 함수</h3>
+    <h3>텍스트 작성 함수</h3>
     
     <div class="func-item">
         <code>insert_text("텍스트\\r")</code>
@@ -762,30 +1213,37 @@ class MainWindow(QMainWindow):
 </div>
 
 <div class="functions">
-    <h3>✨ 주요 기능</h3>
+    <h3>주요 기능</h3>
     
     <div class="func-item">
-        <span class="setting-label">💾 스크립트 저장</span>
-        <small>현재 에디터의 코드를 Python 파일로 저장</small>
+        <img src='{save_icon}' style='width:18px; height:18px; vertical-align:middle; padding-right:12px;' />스크립트 저장
+        <small style="padding-left: 5px; margin-left: 5px;">현재 에디터의 코드를 Python 파일로 저장</small>
     </div>
     
     <div class="func-item">
-        <span class="setting-label">📂 스크립트 불러오기</span>
-        <small>저장된 코드 파일을 에디터에 불러오기</small>
+        <img src='{load_icon}' style='width:18px; height:18px; vertical-align:middle; padding-right:12px;' />스크립트 불러오기
+        <small style="padding-left: 5px; margin-left: 5px;" >저장된 코드 파일을 에디터에 불러오기</small>
     </div>
     
     <div class="func-item">
-        <span class="setting-label">🌙 다크 모드</span>
-        <small>밝은 테마와 어두운 테마 전환</small>
+        <img src='{light_icon}' style='width:18px; height:18px; vertical-align:middle; padding-right:12px;' />다크 모드
+        <small style="padding-left: 5px; margin-left: 5px;">밝은 테마와 어두운 테마 전환</small>
     </div>
     
     <div class="func-item">
-        <span class="setting-label">⚙️ 설정</span>
-        <small>앱 정보 및 단축키 확인</small>
+        <img src='{settings_icon}' style='width:18px; height:18px; vertical-align:middle; padding-right:12px;' />설정
+        <small style="padding-left: 5px; margin-left: 5px;">앱 정보 및 단축키 확인</small>
     </div>
 </div>
 """
-        msg = _create_styled_dialog(self, "사용 방법", howto_content, 600, dark_mode=self.dark_mode)
+        msg = _create_styled_dialog(
+            self,
+            "사용 방법",
+            howto_content,
+            600,
+            dark_mode=self.dark_mode,
+
+        )
         msg.exec()
 
     def _show_latex_helper(self) -> None:
@@ -799,7 +1257,8 @@ class MainWindow(QMainWindow):
     .codes { display: block; }
     .codes code { display: block; background: #f3f4f6; color: #111827; padding: 6px 8px; border-radius: 8px; margin-bottom: 6px; }
     .dark-mode .codes code { background: #1f2937; color: #e5e7eb; }
-    .codes.inline code { display: inline-block; margin-right: 8px; margin-bottom: 6px; background: transparent; padding: 0; }
+    .codes.inline code { display: inline-block; margin-right: 8px; margin-bottom: 6px; background: transparent; color: #111827; padding: 0; border-radius: 0; }
+    .dark-mode .codes.inline code { background: #1f2937; color: #e5e7eb; }
 </style>
 
 <h2>📐 LaTeX 수식 가이드</h2>
@@ -907,26 +1366,36 @@ class MainWindow(QMainWindow):
     </tr>
 </table>
 """
-        msg = _create_styled_dialog(self, "LaTeX 수식 가이드", latex_content, 900, 600, dark_mode=self.dark_mode)
+        msg = _create_styled_dialog(
+            self,
+            "LaTeX 수식 가이드",
+            latex_content,
+            900,
+            600,
+            dark_mode=self.dark_mode,
+
+        )
         msg.exec()
 
     def _append_log(self, text: str) -> None:
-        """Update output text with latest message."""
-        self.output_text.setText(text)
+        """Append message to log output."""
+        self.log_output.append(text)
 
     def _set_settings_glyph(self) -> None:
         """Set settings icon."""
-        self.settings_btn.setText("⚙️")
-        font = self.settings_btn.font()
-        font.setPointSize(24)
-        self.settings_btn.setFont(font)
+        self.settings_btn.setText("[#]")
+        self._apply_button_icon(self.settings_btn, "settings", "[#]", QSize(32, 32))
 
     def _show_settings(self) -> None:
         """Show settings dialog."""
-        settings_content = """
-<h2>⚙️ 설정</h2>
+        settings_icon = self._get_icon_path_str("settings") or ""
+        settings_content = f"""
+    <div style='display: flex; align-items: center; gap: 12px; margin-bottom: 20px;'>
+        <span style='font-size: 20px; flex-shrink: 0;'>⚙️</span>
+        <h2 style='font-size: 20px; margin: 0; padding: 0;'>설정</h2>
+    </div>
 
-<div class="setting-section">
+    <div class="setting-section">
     <div class="setting-title">애플리케이션 정보</div>
     
     <div class="setting-item">
@@ -949,7 +1418,14 @@ class MainWindow(QMainWindow):
     <strong>참고:</strong> 한글 자동화는 Windows 환경에서만 작동합니다. macOS/Linux에서는 스크립트 편집 기능만 사용 가능합니다.
 </div>
 """
-        msg = _create_styled_dialog(self, "설정", settings_content, 550, dark_mode=self.dark_mode)
+        msg = _create_styled_dialog(
+            self,
+            "설정",
+            settings_content,
+            550,
+            dark_mode=self.dark_mode,
+            icon_path=None,
+        )
         msg.exec()
 
     def _show_ai_generate_dialog(self) -> None:
@@ -957,20 +1433,16 @@ class MainWindow(QMainWindow):
         if not self.chatgpt.is_available():
             self._show_error_dialog(
                 "ChatGPT API를 사용할 수 없습니다.\n\n"
-                "설정 방법:\n"
-                "1. OpenAI 계정 생성 (https://openai.com)\n"
-                "2. API 키 발급\n"
-                "3. OPENAI_API_KEY 환경변수 설정\n"
-                "4. 앱 재시작"
+                "자세한 사항은 개발진에게 문의해주세요."
             )
             return
 
         # Use a simple text input via QMessageBox
         text, ok = self._get_text_input(
-            "💻 AI 스크립트 생성",
+            "[+] AI 스크립트 생성",
             "스크립트 생성을 위한 설명을 입력하세요\n\n"
-            "예) 처음에 \"수학 문제\"라는 제목을 입력하고,\n"
-            "'그 아래에 이차방정식 공식을 삽입하는 코드를 작성해줘."
+            "예) '처음에 \"수학 문제\"라는 제목을 입력하고,\n"
+            "그 아래에 이차방정식 공식을 삽입하는 코드를 작성해줘.'"
         )
         
         if ok and text.strip():
@@ -991,10 +1463,10 @@ class MainWindow(QMainWindow):
             return
 
         text, ok = self._get_text_input(
-            "✨ AI 스크립트 최적화",
+            "[*] AI 스크립트 최적화",
             "최적화 요청사항을 입력하세요\n\n"
-            "예) '코드를 더 간결하게 만들어주세요'\n"
-            "'오류 처리를 추가해주세요'\n\n"
+            "예) '코드를 더 간결하게 만들어줘'\n"
+            "'오류 처리를 추가해줘'\n\n"
             "(비워두면 기본적인 최적화가 진행됩니다)"
         )
         
@@ -1180,7 +1652,7 @@ class MainWindow(QMainWindow):
     def _optimize_script_with_ai(self, feedback: str) -> None:
         """Optimize current script using ChatGPT API."""
         print("[MainWindow] _optimize_script_with_ai called")
-        self._append_log("✨ AI가 스크립트를 최적화하는 중...")
+        self._append_log("[*] AI가 스크립트를 최적화하는 중...")
         self.run_button.setEnabled(False)
         self.ai_generate_button.setEnabled(False)
         self.ai_optimize_button.setEnabled(False)
@@ -1225,6 +1697,39 @@ class MainWindow(QMainWindow):
         self.run_button.setEnabled(True)
         self.ai_generate_button.setEnabled(True)
         self.ai_optimize_button.setEnabled(True)
+
+    def _update_hwp_filename(self) -> None:
+        """Automatically detect and update the currently open HWP document filename."""
+        try:
+            if platform.system() == "Windows":
+                import win32gui  # type: ignore[import-not-found]
+                import re
+                
+                # Find HWP window
+                hwp_window = win32gui.FindWindow("HwpFrame", None)
+                if hwp_window:
+                    # Get window title which contains the filename
+                    title = win32gui.GetWindowText(hwp_window)
+                    # Title format: "filename.hwp - 한글" or "filename.hwp"
+                    # Extract filename from title
+                    match = re.search(r"([^\\\/]+\.hwp[x]?)", title, re.IGNORECASE)
+                    if match:
+                        filename = match.group(1)
+                        if filename != self._last_hwp_filename:
+                            self._last_hwp_filename = filename
+                            self.hwp_filename_label.setText(filename)
+                    return
+                
+                # If no HWP window found, reset to default
+                if self._last_hwp_filename != "한글 문서":
+                    self._last_hwp_filename = "한글 문서"
+                    self.hwp_filename_label.setText("한글 문서")
+            else:
+                # macOS/Linux: Only update from file picker, not from active window
+                pass
+        except Exception as e:
+            # Silently fail - this is a background detection feature
+            print(f"[HWP Detection] Error: {e}")
 
 
 def run_app() -> None:
