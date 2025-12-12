@@ -135,13 +135,14 @@ QPushButton#primary-action:disabled {
 }
 
 #log-output {
-    background-color: #1a1a1a;
+    background-color: transparent;
     border: 1px solid #4a4a4a;
     border-radius: 8px;
     padding: 12px;
-    color: #bbb;
+    color: #ffffff !important;
     font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
     font-size: 12px;
+    line-height: 2.5;
 }
 
 #log-output:focus {

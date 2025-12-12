@@ -6,8 +6,14 @@ import platform
 from pathlib import Path
 from typing import Optional
 
+# Optional speech recognition
+try:
+    import speech_recognition as sr  # type: ignore[import-not-found]
+except ImportError:  # pragma: no cover - optional dependency
+    sr = None  # type: ignore[assignment]
+
 from PySide6.QtCore import Qt, Signal, QThread, QObject, QSize, QTimer, QPropertyAnimation, QEasingCurve, QPoint
-from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QPainter, QPixmap
+from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QPainter, QPixmap, QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -89,6 +95,41 @@ class AIWorker(QObject):
             print(f"[AIWorker] EXCEPTION: {error_msg}")
             print(f"[AIWorker] Traceback:\n{error_trace}")
             self.error.emit(f"{error_msg}\n\nTraceback:\n{error_trace}")
+
+
+class SpeechRecognitionWorker(QThread):
+    """Worker for speech recognition in a separate thread."""
+    text_recognized = Signal(str)
+    error_signal = Signal(str)
+    finished_signal = Signal()
+
+    def run(self) -> None:  # type: ignore[override]
+        if sr is None:
+            self.error_signal.emit("speech_recognition 라이브러리가 설치되어 있지 않습니다.\npip install SpeechRecognition pyaudio")
+            self.finished_signal.emit()
+            return
+
+        try:
+            recognizer = sr.Recognizer()
+            with sr.Microphone() as source:
+                # Adjust for ambient noise
+                recognizer.adjust_for_ambient_noise(source, duration=1)
+                self.error_signal.emit("🎤 듣는 중... 조용한 곳에서 말씀해주세요.")
+                audio = recognizer.listen(source, timeout=10)
+
+            try:
+                text = recognizer.recognize_google(audio, language='ko-KR')  # type: ignore[attr-defined]
+                self.text_recognized.emit(text)
+            except sr.UnknownValueError:
+                self.error_signal.emit("음성을 인식할 수 없습니다. 더 명확하게 말씀해주세요.")
+            except sr.RequestError as e:
+                self.error_signal.emit(f"음성 인식 서비스 오류: {e}")
+        except sr.WaitTimeoutError:
+            self.error_signal.emit("시간 초과로 음성을 받지 못했습니다.")
+        except Exception as e:  # pragma: no cover - hardware dependent
+            self.error_signal.emit(f"마이크 오류: {e}")
+        finally:
+            self.finished_signal.emit()
 
 
 def _load_dialog_css() -> str:
@@ -181,6 +222,12 @@ TEMPLATES = {
         "use_theme": True,
         "code": 'insert_equation(r"A = \\begin{bmatrix} a & b \\\\ c & d \\end{bmatrix}", font_size_pt=14.0)'
     },
+    "표": {
+        "icon_key": "chart_icon",
+        "fallback": "📊",
+        "use_theme": True,
+        "code": '# 3x3 표 생성 예시\ninsert_table(rows=3, cols=3, treat_as_char=False)\n\n# 데이터가 있는 표 생성 예시\n# data = [["항목", "값1", "값2"], ["A", "10", "20"], ["B", "30", "40"]]\n# insert_table(rows=3, cols=3, cell_data=data)'
+    },
     "시그마": {
         "icon_key": "",
         "fallback": "Σ",
@@ -228,15 +275,21 @@ class ScriptWorker(QThread):
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("HMATH AI")
+        self.setWindowTitle("FormuLite")
         self.resize(900, 900)
         self._worker: Optional[ScriptWorker] = None
+        self.sr_worker: Optional[SpeechRecognitionWorker] = None
         self.dark_mode = True
         self.chatgpt = ChatGPTHelper()
         self.selected_files: list[str] = []  # Track selected files/images
         self._last_hwp_filename = "한글 문서"  # Track last known HWP filename
         self._hwp_detection_timer = QTimer()
         self._hwp_detection_timer.timeout.connect(self._update_hwp_filename)
+        self._progress_active = False  # Track if progress message is active
+        self._progress_base_text = ""  # Current progress text
+        self._progress_fade_count = 0  # Frame counter for fade animation (0-9)
+        self._progress_timer = QTimer()
+        self._progress_timer.timeout.connect(self._animate_progress_fade)
         self._build_ui()
         self._apply_styles()
         self._hwp_detection_timer.start(500)  # Check every 500ms
@@ -322,33 +375,39 @@ class MainWindow(QMainWindow):
         main_column.setContentsMargins(0, 0, 0, 0)
         main_column.setSpacing(0)
         
-        # Top content area (templates or chat)
-        self.content_area = QWidget()
-        content_layout = QVBoxLayout(self.content_area)
-        content_layout.setContentsMargins(40, 40, 40, 0)
-        content_layout.setSpacing(20)
+        # Header area (title, help buttons, templates)
+        self.header_area = QWidget()
+        header_layout = QVBoxLayout(self.header_area)
+        header_layout.setContentsMargins(40, 40, 40, 0)
+        header_layout.setSpacing(20)
         
-        content_layout.addWidget(self._build_header())
-        content_layout.addWidget(self._build_help_buttons())
-        content_layout.addWidget(self._build_templates(), 1)
+        header_layout.addWidget(self._build_header())
+        header_layout.addWidget(self._build_help_buttons())
+        header_layout.addWidget(self._build_templates(), 0)  # No stretch
         
-        # Input area (fixed at bottom)
-        input_area = QWidget()
-        input_area.setObjectName("input-container")
-        input_layout = QVBoxLayout(input_area)
-        input_layout.setContentsMargins(40, 24, 40, 40)
-        input_layout.setSpacing(20)
+        # Output area (conversation/chat display)
+        self.output_area = QWidget()
+        self.output_area.setObjectName("output-container")
+        output_layout = QVBoxLayout(self.output_area)
+        output_layout.setContentsMargins(40, 20, 40, 20)
+        output_layout.setSpacing(16)
         
-        # Restore log_output QTextEdit for scrollable multi-line output
+        # Conversation-style output area
         self.log_output = QTextEdit()
         self.log_output.setObjectName("log-output")
         self.log_output.setReadOnly(True)
-        self.log_output.setMinimumHeight(60)
-        self.log_output.setMaximumHeight(100)
-        # Custom context menu for log output
+        self.log_output.setMinimumHeight(150)
+        # Context menu for log output
         self.log_output.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.log_output.customContextMenuRequested.connect(self._show_log_context_menu)
-        input_layout.addWidget(self.log_output)
+        output_layout.addWidget(self.log_output, 1)  # Take most space
+        
+        # Input area at bottom (fixed)
+        input_area = QWidget()
+        input_area.setObjectName("input-container")
+        input_layout = QVBoxLayout(input_area)
+        input_layout.setContentsMargins(40, 0, 40, 40)
+        input_layout.setSpacing(12)
         
         # Image preview area (initially hidden)
         self.image_preview_container = QWidget()
@@ -372,8 +431,8 @@ class MainWindow(QMainWindow):
         self.script_edit.setObjectName("script-editor")
         self.script_edit.setPlaceholderText("코드를 작성하거나 붙여넣으세요")
         self.script_edit.setPlainText(DEFAULT_SCRIPT.strip())
-        self.script_edit.setMaximumHeight(220)
-        self.script_edit.setMinimumHeight(160)
+        self.script_edit.setMaximumHeight(180)
+        self.script_edit.setMinimumHeight(140)
         # Custom context menu in Korean
         self.script_edit.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.script_edit.customContextMenuRequested.connect(self._show_editor_context_menu)
@@ -467,8 +526,10 @@ class MainWindow(QMainWindow):
         
         input_layout.addWidget(script_container)
 
-        main_column.addWidget(self.content_area, 1)
-        main_column.addWidget(input_area, 0)
+        # Add areas to main column with proper spacing
+        main_column.addWidget(self.header_area, 0)      # Header with fixed height
+        main_column.addWidget(self.output_area, 2)      # Output takes 2/3 space
+        main_column.addWidget(input_area, 1)            # Input takes 1/3 space
 
         layout.addWidget(main_area, 1)
         layout.addWidget(self._build_sidebar(), 0)
@@ -495,7 +556,7 @@ class MainWindow(QMainWindow):
         title_layout.addWidget(self.logo_label)
         
         # Title text
-        title = QLabel("HMATH")
+        title = QLabel("FormuLite")
         title.setObjectName("app-title")
         title_layout.addWidget(title)
         
@@ -748,12 +809,25 @@ class MainWindow(QMainWindow):
     def _set_app_logo(self) -> None:
         """Set main title logo based on theme."""
         if hasattr(self, "logo_label"):
-            icon_path = self._get_icon_path("logo")
-            if icon_path:
-                pix = QPixmap(str(icon_path)).scaled(36, 36, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-                self.logo_label.setPixmap(pix)
-                self.logo_label.setText("")
-            else:
+            # Use the formulite_logo files
+            assets_dir = Path(__file__).resolve().parents[1] / "public" / "img"
+            
+            # Try .jpg first, then .png
+            logo_paths = [
+                assets_dir / "formulite_logo.jpg",
+                assets_dir / "formulite_logo.png"
+            ]
+            
+            logo_loaded = False
+            for logo_path in logo_paths:
+                if logo_path.exists():
+                    pix = QPixmap(str(logo_path)).scaled(36, 36, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                    self.logo_label.setPixmap(pix)
+                    self.logo_label.setText("")
+                    logo_loaded = True
+                    break
+            
+            if not logo_loaded:
                 self.logo_label.setPixmap(QPixmap())
                 self.logo_label.setText("[∑]")
                 self.logo_label.setStyleSheet("font-size: 36px; color: #5377f6;")
@@ -804,6 +878,41 @@ class MainWindow(QMainWindow):
                     btn.setText(f"{fallback} {label}")
         self._set_app_logo()
 
+    def _show_log_context_menu(self, pos) -> None:
+        """Custom right-click menu for the log output (Korean labels)."""
+        menu = QMenu(self)
+        menu.setStyleSheet(
+            """
+            QMenu {
+                background-color: rgba(40, 40, 40, 0.96);
+                color: #f4f4f4;
+                border: 1px solid #4a4a4a;
+                padding: 6px 4px;
+                border-radius: 8px;
+            }
+            QMenu::item {
+                padding: 6px 18px;
+                border-radius: 6px;
+            }
+            QMenu::item:selected {
+                background: #5377f6;
+                color: white;
+            }
+            """
+        )
+
+        actions = [
+            ("잘라내기", self.log_output.cut),
+            ("복사", self.log_output.copy),
+            ("모두 선택", self.log_output.selectAll),
+        ]
+
+        for label, handler in actions:
+            act = menu.addAction(label)
+            act.triggered.connect(handler)
+
+        menu.exec(self.log_output.mapToGlobal(pos))
+
     def _show_editor_context_menu(self, pos) -> None:
         """Custom right-click menu for the editor (Korean labels)."""
         menu = QMenu(self)
@@ -843,41 +952,6 @@ class MainWindow(QMainWindow):
 
         menu.exec(self.script_edit.mapToGlobal(pos))
 
-    def _show_log_context_menu(self, pos) -> None:
-        """Custom right-click menu for the log output (Korean labels)."""
-        menu = QMenu(self)
-        menu.setStyleSheet(
-            """
-            QMenu {
-                background-color: rgba(40, 40, 40, 0.96);
-                color: #f4f4f4;
-                border: 1px solid #4a4a4a;
-                padding: 6px 4px;
-                border-radius: 8px;
-            }
-            QMenu::item {
-                padding: 6px 18px;
-                border-radius: 6px;
-            }
-            QMenu::item:selected {
-                background: #5377f6;
-                color: white;
-            }
-            """
-        )
-
-        actions = [
-            ("잘라내기", self.log_output.cut),
-            ("복사", self.log_output.copy),
-            ("모두 선택", self.log_output.selectAll),
-        ]
-
-        for label, handler in actions:
-            act = menu.addAction(label)
-            act.triggered.connect(handler)
-
-        menu.exec(self.log_output.mapToGlobal(pos))
-
     def _handle_run_clicked(self) -> None:
         if self._worker and self._worker.isRunning():
             self._show_info_dialog("진행 중", "이미 스크립트를 실행 중입니다.")
@@ -892,7 +966,7 @@ class MainWindow(QMainWindow):
         self._worker.start()
 
     def _handle_error(self, message: str) -> None:
-        self._append_log(f"[오류] {message}")
+        self._append_log(f"❌ {message}")
         self.run_button.setEnabled(True)
 
     def _save_script(self) -> None:
@@ -1009,10 +1083,56 @@ class MainWindow(QMainWindow):
 
     def _handle_voice_input(self) -> None:
         """Handle microphone/voice input button click."""
-        # Placeholder for voice input functionality
-        # TODO: Implement speech-to-text integration with microphone library
-        # No alert for now to keep UX clean; future implementation will activate mic capture here.
-        return
+        if sr is None:
+            self._show_error_dialog(
+                "음성 인식을 위해 SpeechRecognition 패키지가 필요합니다.\n\npip install SpeechRecognition pyaudio"
+            )
+            return
+
+        if self.sr_worker and self.sr_worker.isRunning():
+            self._append_log("🎤 이미 음성을 듣고 있어요. 잠시만 기다려주세요.")
+            return
+
+        self.mic_btn.setEnabled(False)
+        self.mic_btn.setText("")
+        self._apply_button_icon(self.mic_btn, "mic", "[MIC]", QSize(28, 28))
+        self._append_log("🎤 음성을 듣는 중...")
+
+        self.sr_worker = SpeechRecognitionWorker()
+        self.sr_worker.text_recognized.connect(self._on_voice_text)
+        self.sr_worker.error_signal.connect(self._on_voice_error)
+        self.sr_worker.finished_signal.connect(self._on_voice_finished)
+        self.sr_worker.start()
+
+    def _on_voice_text(self, text: str) -> None:
+        """Handle recognized speech text."""
+        clean = text.strip()
+        if not clean:
+            self._append_log("받은 음성 텍스트가 비어 있습니다.")
+            return
+
+        self._append_log(f"🗣️ 음성 입력: {clean}")
+
+        cursor = self.script_edit.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        insert_text = clean
+        if self.script_edit.toPlainText().strip():
+            insert_text = "\n" + clean
+        cursor.insertText(insert_text)
+        self.script_edit.setTextCursor(cursor)
+        self._animate_focus(self.script_edit)
+        self._append_log("📝 음성 인식 결과를 편집기에 추가했습니다.")
+
+    def _on_voice_error(self, message: str) -> None:
+        """Handle speech recognition errors or status updates."""
+        self._append_log(message)
+
+    def _on_voice_finished(self) -> None:
+        """Re-enable mic button after speech recognition completes."""
+        self.mic_btn.setEnabled(True)
+        self.mic_btn.setText("[MIC]")
+        self._apply_button_icon(self.mic_btn, "mic", "[MIC]", QSize(28, 28))
+        self.sr_worker = None
 
     def _show_help_menu(self) -> None:
         """Show help menu dialog."""
@@ -1126,8 +1246,8 @@ class MainWindow(QMainWindow):
         success.setObjectName("success-indicator")
         success.setStyleSheet("color: #5377f6; font-size: 28px;")
         
-        # Show briefly in the log area
-        self.log_output.append("[V] 스크립트가 성공적으로 완료되었습니다!")
+        # Show briefly in the conversation area
+        self._append_log("[V] 스크립트가 성공적으로 완료되었습니다!")
 
     def _toggle_theme(self, checked: bool) -> None:
         """Toggle between light and dark theme."""
@@ -1381,6 +1501,125 @@ class MainWindow(QMainWindow):
         """Append message to log output."""
         self.log_output.append(text)
 
+    def _append_user_input(self, text: str) -> None:
+        """Append user input to log output with right alignment and speech balloon emoji."""
+        cursor = self.log_output.textCursor()
+        cursor.movePosition(cursor.MoveOperation.End)
+        
+        # Add spacing if there's already content
+        if self.log_output.toPlainText().strip():
+            cursor.insertBlock()
+        
+        # Create block format for right alignment
+        block_format = cursor.blockFormat()
+        block_format.setAlignment(Qt.AlignmentFlag.AlignRight)
+        cursor.setBlockFormat(block_format)
+        
+        # Set character format for user message
+        char_format = cursor.charFormat()
+        char_format.setForeground(QColor(100, 150, 200))
+        
+        cursor.setCharFormat(char_format)
+        # Add speech balloon emoji to the left of the text
+        cursor.insertText(f"\n\n💬 {text}")
+        
+        # Add newline for spacing
+        cursor.insertBlock()
+        block_format.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        cursor.setBlockFormat(block_format)
+        
+        self.log_output.setTextCursor(cursor)
+
+    def _update_progress_message(self, base_text: str) -> None:
+        """Update progress message with fade animation on text change."""
+        # If this is a new progress message (different text), trigger fade animation
+        if self._progress_base_text != base_text:
+            self._progress_base_text = base_text
+            self._progress_fade_count = 0  # Reset fade animation
+            
+            # If no progress started yet, add a new line
+            if not self._progress_active:
+                self.log_output.append(base_text)
+                self._progress_active = True  # Mark that progress is active
+            else:
+                # Progress already active, replace the last line with new text
+                cursor = self.log_output.textCursor()
+                cursor.movePosition(cursor.MoveOperation.End)
+                cursor.select(cursor.SelectionType.LineUnderCursor)
+                if cursor.selectedText():
+                    cursor.removeSelectedText()
+                self.log_output.append(base_text)
+            
+            # Start fade animation (20 frames total: 10 fade-out, 10 fade-in)
+            self._progress_timer.start(50)  # 50ms per frame = 500ms total transition
+        else:
+            # Same text, continue animation
+            pass
+
+    def _animate_progress_fade(self) -> None:
+        """Apply fade-in/fade-out animation when text changes with cycling dots."""
+        if not self._progress_active:
+            self._progress_timer.stop()
+            return
+        
+        # Fade animation: frames 0-19 (total 20 frames)
+        frame = self._progress_fade_count
+        self._progress_fade_count = (self._progress_fade_count + 1) % 20
+        
+        # Calculate opacity: fade out (0-9), then fade in (10-19)
+        if frame < 10:  # Fade out: 1.0 to 0.0
+            opacity = 1.0 - (frame / 10.0)
+        else:  # Fade in: 0.0 to 1.0
+            opacity = (frame - 10) / 10.0
+        
+        # Cycling dots: . → .. → ... → (empty) → repeat (slower cycle with 8 states)
+        # Hide dots when completion message appears
+        if "생성 완료:" in self._progress_base_text or "최적화 완료:" in self._progress_base_text:
+            dots = ""  # No dots for completion messages
+        else:
+            dot_cycle = frame % 100  # Even slower: 16 states instead of 8
+            if dot_cycle < 3:
+                dots = "."  # 1 dot
+            elif dot_cycle < 6:
+                dots = ".."  # 2 dots
+            elif dot_cycle < 9:
+                dots = "..."  # 3 dots
+            else:
+                dots = ""  # Empty
+        
+        updated_text = f"{self._progress_base_text}{dots}"
+        
+        # Interpolate color from dim (100) to normal (150)
+        dim_gray = 100
+        normal_gray = 150
+        color_value = int(dim_gray + (normal_gray - dim_gray) * opacity)
+        
+        # Apply the fade effect to the last line
+        cursor = self.log_output.textCursor()
+        cursor.movePosition(cursor.MoveOperation.End)
+        
+        # Select entire last line
+        cursor.select(cursor.SelectionType.LineUnderCursor)
+        selected_text = cursor.selectedText()
+        
+        # Only apply formatting if we have a progress message
+        if selected_text:
+            # Remove the old text and insert new one with dots
+            cursor.removeSelectedText()
+            cursor.insertText(updated_text)
+            
+            # Apply the color to the selected text
+            char_format = cursor.charFormat()
+            char_format.setForeground(QColor(color_value, color_value, color_value))
+            cursor.setCharFormat(char_format)
+
+    def _clear_progress_message(self) -> None:
+        """Clear the active progress message."""
+        self._progress_timer.stop()
+        self._progress_active = False
+        self._progress_base_text = ""
+        self._progress_fade_count = 0
+
     def _set_settings_glyph(self) -> None:
         """Set settings icon."""
         self.settings_btn.setText("[#]")
@@ -1428,6 +1667,44 @@ class MainWindow(QMainWindow):
         )
         msg.exec()
 
+    def _voice_to_text(self) -> Optional[str]:
+        """Convert voice input to text using speech recognition."""
+        if sr is None:
+            self._show_error_dialog(
+                "음성 인식 기능을 사용할 수 없습니다.\n\n"
+                "speech_recognition 패키지를 설치해주세요:\n"
+                "pip install SpeechRecognition pyaudio"
+            )
+            return None
+        
+        recognizer = sr.Recognizer()  # type: ignore[attr-defined]
+        try:
+            with sr.Microphone() as source:  # type: ignore[attr-defined]
+                self._append_log("🎤 음성을 듣고 있습니다...")
+                recognizer.adjust_for_ambient_noise(source, duration=0.5)  # type: ignore[attr-defined]
+                audio = recognizer.listen(source, timeout=5, phrase_time_limit=10)  # type: ignore[attr-defined]
+                self._append_log("🔄 음성을 텍스트로 변환 중...")
+                
+                # Try Korean first, then fallback to English
+                try:
+                    text = recognizer.recognize_google(audio, language="ko-KR")  # type: ignore[attr-defined]
+                    self._append_log(f"✅ 인식 완료: {text}")
+                    return text
+                except sr.UnknownValueError:  # type: ignore[attr-defined]
+                    try:
+                        text = recognizer.recognize_google(audio, language="en-US")  # type: ignore[attr-defined]
+                        self._append_log(f"✅ 인식 완료: {text}")
+                        return text
+                    except sr.UnknownValueError:  # type: ignore[attr-defined]
+                        self._append_log("❌ 음성을 인식할 수 없습니다.")
+                        return None
+        except sr.WaitTimeoutError:  # type: ignore[attr-defined]
+            self._append_log("❌ 음성 입력 시간이 초과되었습니다.")
+            return None
+        except Exception as e:
+            self._append_log(f"❌ 음성 인식 오류: {str(e)}")
+            return None
+
     def _show_ai_generate_dialog(self) -> None:
         """Show dialog to generate script with ChatGPT."""
         if not self.chatgpt.is_available():
@@ -1442,7 +1719,8 @@ class MainWindow(QMainWindow):
             "[+] AI 스크립트 생성",
             "스크립트 생성을 위한 설명을 입력하세요\n\n"
             "예) '처음에 \"수학 문제\"라는 제목을 입력하고,\n"
-            "그 아래에 이차방정식 공식을 삽입하는 코드를 작성해줘.'"
+            "그 아래에 이차방정식 공식을 삽입하는 코드를 작성해줘.'",
+            enable_voice=True
         )
         
         if ok and text.strip():
@@ -1467,13 +1745,14 @@ class MainWindow(QMainWindow):
             "최적화 요청사항을 입력하세요\n\n"
             "예) '코드를 더 간결하게 만들어줘'\n"
             "'오류 처리를 추가해줘'\n\n"
-            "(비워두면 기본적인 최적화가 진행됩니다)"
+            "(비워두면 기본적인 최적화가 진행됩니다)",
+            enable_voice=True
         )
         
         if ok:
             self._optimize_script_with_ai(text)
 
-    def _get_text_input(self, title: str, prompt: str) -> tuple[str, bool]:
+    def _get_text_input(self, title: str, prompt: str, enable_voice: bool = False) -> tuple[str, bool]:
         """Get text input from user via custom styled dialog with buttons inside form."""
         dialog = QDialog(self)
         dialog.setWindowTitle(title)
@@ -1538,10 +1817,35 @@ class MainWindow(QMainWindow):
         
         input_layout.addWidget(input_field)
         
-        # Button row at bottom right (inside input form)
+        # Button row at bottom (inside input form)
         button_row = QHBoxLayout()
         button_row.setContentsMargins(0, 0, 0, 0)
         button_row.setSpacing(12)
+        
+        # Voice button on the left (if enabled)
+        voice_btn = None
+        if enable_voice and sr is not None:
+            voice_btn = QPushButton("[MIC]")
+            voice_btn.setObjectName("upload-button")
+            voice_btn.setMaximumWidth(44)
+            voice_btn.setMinimumWidth(44)
+            voice_btn.setMinimumHeight(36)
+            voice_btn.setToolTip("음성으로 입력하기")
+            
+            def on_voice_click():
+                dialog.hide()  # Hide dialog while recording
+                voice_text = self._voice_to_text()
+                dialog.show()  # Show dialog again
+                if voice_text:
+                    current_text = input_field.toPlainText()
+                    if current_text:
+                        input_field.setPlainText(current_text + " " + voice_text)
+                    else:
+                        input_field.setPlainText(voice_text)
+            
+            voice_btn.clicked.connect(on_voice_click)
+            button_row.addWidget(voice_btn)
+        
         button_row.addStretch()
         
         cancel_btn = QPushButton("Cancel")
@@ -1570,6 +1874,10 @@ class MainWindow(QMainWindow):
         theme_qss = _load_theme(theme_name)
         input_field.setStyleSheet(theme_qss)
         
+        # Apply mic icon to voice button (same as main window)
+        if voice_btn is not None:
+            self._apply_button_icon(voice_btn, "mic", "[MIC]", QSize(28, 28))
+        
         # Handle button clicks
         ok_clicked = False
         def on_ok():
@@ -1595,7 +1903,10 @@ class MainWindow(QMainWindow):
     def _generate_script_with_ai(self, description: str) -> None:
         """Generate script using ChatGPT API."""
         print("[MainWindow] _generate_script_with_ai called")
-        self._append_log("🤖 AI가 스크립트를 생성하는 중...")
+        
+        # Display user's input on the right side
+        self._append_user_input(description)
+        
         self.run_button.setEnabled(False)
         self.ai_generate_button.setEnabled(False)
         self.ai_optimize_button.setEnabled(False)
@@ -1620,7 +1931,7 @@ class MainWindow(QMainWindow):
         # Connect signals
         print("[MainWindow] Connecting signals...")
         self.ai_thread.started.connect(self.ai_worker.run)
-        self.ai_worker.thought.connect(lambda msg: self._append_log(f"💭 {msg}"))
+        self.ai_worker.thought.connect(self._on_ai_thought)
         self.ai_worker.finished.connect(self._on_generate_finished)
         self.ai_worker.error.connect(self._on_generate_error)
         self.ai_worker.finished.connect(self.ai_thread.quit)
@@ -1635,24 +1946,69 @@ class MainWindow(QMainWindow):
     
     def _on_generate_finished(self, generated_code: str) -> None:
         """Handle successful script generation."""
-        self.script_edit.setPlainText(generated_code)
-        self._append_log("✅ 스크립트 생성 완료!")
-        self.run_button.setEnabled(True)
-        self.ai_generate_button.setEnabled(True)
-        self.ai_optimize_button.setEnabled(True)
+        # Replace the progress line with completion message - triggers fade transition
+        completion_msg = "✅ 스크립트 생성 완료!"
+        
+        # Update with completion message (will trigger fade animation)
+        self._update_progress_message(completion_msg)
+        
+        # Parse all sections from response
+        code = ""
+        description = ""
+        
+        def extract_section(text: str, tag: str) -> str:
+            """Extract content between tags."""
+            open_tag = f"[{tag}]"
+            close_tag = f"[/{tag}]"
+            if open_tag in text and close_tag in text:
+                start = text.index(open_tag) + len(open_tag)
+                end = text.index(close_tag)
+                return text[start:end].strip()
+            return ""
+        
+        code = extract_section(generated_code, "CODE")
+        description = extract_section(generated_code, "DESCRIPTION")
+        
+        # Wait for animation to complete before clearing
+        def finish_animation():
+            self._clear_progress_message()
+            # Display code with Korean label
+            if code:
+                self._append_log("\n\n💻 코드")
+                self._append_log(code)
+            # Display description with Korean label
+            if description:
+                self._append_log("\n📝 설명")
+                self._append_log(description)
+            # Put code in editor
+            if code:
+                self.script_edit.setPlainText(code)
+            self.run_button.setEnabled(True)
+            self.ai_generate_button.setEnabled(True)
+            self.ai_optimize_button.setEnabled(True)
+        
+        QTimer.singleShot(600, finish_animation)
     
     def _on_generate_error(self, error_msg: str) -> None:
         """Handle script generation error."""
+        self._clear_progress_message()
         self._append_log(f"❌ 스크립트 생성 실패: {error_msg}")
         self._show_error_dialog(f"스크립트 생성 중 오류가 발생했습니다.\n\n{error_msg}")
         self.run_button.setEnabled(True)
         self.ai_generate_button.setEnabled(True)
         self.ai_optimize_button.setEnabled(True)
 
+    def _on_ai_thought(self, msg: str) -> None:
+        """Handle AI thought updates on the UI thread with animated progress."""
+        self._update_progress_message(f"📝 {msg}")
+
     def _optimize_script_with_ai(self, feedback: str) -> None:
         """Optimize current script using ChatGPT API."""
         print("[MainWindow] _optimize_script_with_ai called")
-        self._append_log("[*] AI가 스크립트를 최적화하는 중...")
+        
+        # Display user's input on the right side
+        self._append_user_input(feedback if feedback.strip() else "(기본 최적화 요청)")
+        
         self.run_button.setEnabled(False)
         self.ai_generate_button.setEnabled(False)
         self.ai_optimize_button.setEnabled(False)
@@ -1669,7 +2025,7 @@ class MainWindow(QMainWindow):
         # Connect signals
         print("[MainWindow] Connecting signals...")
         self.ai_thread.started.connect(self.ai_worker.run)
-        self.ai_worker.thought.connect(lambda msg: self._append_log(f"💭 {msg}"))
+        self.ai_worker.thought.connect(self._on_ai_thought)
         self.ai_worker.finished.connect(self._on_optimize_finished)
         self.ai_worker.error.connect(self._on_optimize_error)
         self.ai_worker.finished.connect(self.ai_thread.quit)
@@ -1684,14 +2040,53 @@ class MainWindow(QMainWindow):
     
     def _on_optimize_finished(self, optimized_code: str) -> None:
         """Handle successful script optimization."""
-        self.script_edit.setPlainText(optimized_code)
-        self._append_log("✅ 스크립트 최적화 완료!")
-        self.run_button.setEnabled(True)
-        self.ai_generate_button.setEnabled(True)
-        self.ai_optimize_button.setEnabled(True)
+        # Replace the progress line with completion message - triggers fade transition
+        completion_msg = "✅ 스크립트 최적화 완료!"
+        
+        # Update with completion message (will trigger fade animation)
+        self._update_progress_message(completion_msg)
+        
+        # Parse all sections from response
+        code = ""
+        description = ""
+        
+        def extract_section(text: str, tag: str) -> str:
+            """Extract content between tags."""
+            open_tag = f"[{tag}]"
+            close_tag = f"[/{tag}]"
+            if open_tag in text and close_tag in text:
+                start = text.index(open_tag) + len(open_tag)
+                end = text.index(close_tag)
+                return text[start:end].strip()
+            return ""
+        
+        code = extract_section(optimized_code, "CODE")
+        description = extract_section(optimized_code, "DESCRIPTION")
+        
+        # Wait for animation to complete before clearing
+        def finish_animation():
+            self._clear_progress_message()
+            # Display code with Korean label
+            if code:
+                self._append_log("💻 코드\n")
+                self._append_log(code)
+                self._append_log("\n")
+            # Display description with Korean label
+            if description:
+                self._append_log("\n📝 설명\n")
+                self._append_log(description)
+            # Put code in editor
+            if code:
+                self.script_edit.setPlainText(code)
+            self.run_button.setEnabled(True)
+            self.ai_generate_button.setEnabled(True)
+            self.ai_optimize_button.setEnabled(True)
+        
+        QTimer.singleShot(600, finish_animation)
     
     def _on_optimize_error(self, error_msg: str) -> None:
         """Handle script optimization error."""
+        self._clear_progress_message()
         self._append_log(f"❌ 스크립트 최적화 실패: {error_msg}")
         self._show_error_dialog(f"스크립트 최적화 중 오류가 발생했습니다.\n\n{error_msg}")
         self.run_button.setEnabled(True)

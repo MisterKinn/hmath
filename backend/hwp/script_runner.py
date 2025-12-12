@@ -77,6 +77,7 @@ class HwpScriptRunner:
             "insert_text": self._controller.insert_text,
             "insert_paragraph": self._controller.insert_paragraph_break,
             "insert_image": self._controller.insert_image,
+            "insert_table": self._controller.insert_table,
             "insert_equation": _insert_equation,
             "insert_hwpeqn": lambda hwpeqn, **kwargs: _insert_equation(
                 hwpeqn, assume_hwpeqn=True, **kwargs

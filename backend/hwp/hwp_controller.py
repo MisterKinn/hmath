@@ -209,4 +209,64 @@ class HwpController:
         except Exception as exc:
             raise HwpControllerError(f"Failed to insert image: {exc}") from exc
 
+    def insert_table(
+        self,
+        rows: int = 3,
+        cols: int = 3,
+        treat_as_char: bool = False,
+        width_mm: Optional[float] = None,
+        cell_data: Optional[list] = None,
+    ) -> None:
+        """
+        Insert a table at the current caret position.
+        
+        Args:
+            rows: Number of rows
+            cols: Number of columns
+            treat_as_char: Whether to treat table as character
+            width_mm: Table width in millimeters
+            cell_data: Optional 2D list of cell contents [[row1_col1, row1_col2], [row2_col1, row2_col2]]
+        """
+        hwp = self._ensure_connected()
+        try:
+            # Create table using CreateTable action
+            action = hwp.HAction
+            if hasattr(hwp.HParameterSet, 'HTableCreation'):
+                param = hwp.HParameterSet.HTableCreation
+                action.GetDefault("TableCreate", param.HSet)
+                param.Rows = rows
+                param.Cols = cols
+                param.TreatAsChar = treat_as_char
+                if width_mm:
+                    param.Width = int(width_mm * 100)  # Convert to hwp units
+                action.Execute("TableCreate", param.HSet)
+            else:
+                # Fallback for older pyhwpx versions
+                param_set = hwp.CreateSet("HTableCreation")
+                action.GetDefault("TableCreate", param_set)
+                param_set.SetItem("Rows", rows)
+                param_set.SetItem("Cols", cols)
+                param_set.SetItem("TreatAsChar", treat_as_char)
+                if width_mm:
+                    param_set.SetItem("Width", int(width_mm * 100))
+                action.Execute("TableCreate", param_set)
+            
+            # Fill table with data if provided
+            if cell_data:
+                for row_idx, row in enumerate(cell_data):
+                    if row_idx >= rows:
+                        break
+                    for col_idx, cell_value in enumerate(row):
+                        if col_idx >= cols:
+                            break
+                        # Move to cell and insert text
+                        hwp.Run("MoveToCell")
+                        if cell_value:
+                            self.insert_text(str(cell_value))
+                        # Move to next cell
+                        hwp.Run("MoveToCell")
+                        
+        except Exception as exc:
+            raise HwpControllerError(f"Failed to insert table: {exc}") from exc
+
 
