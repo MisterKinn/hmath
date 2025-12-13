@@ -12,8 +12,8 @@ try:
 except ImportError:  # pragma: no cover - optional dependency
     sr = None  # type: ignore[assignment]
 
-from PySide6.QtCore import Qt, Signal, QThread, QObject, QSize, QTimer, QPropertyAnimation, QEasingCurve, QPoint
-from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QPainter, QPixmap, QTextCursor
+from PySide6.QtCore import Qt, Signal, QThread, QObject, QSize, QTimer, QPropertyAnimation, QEasingCurve, QPoint, QUrl
+from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QPainter, QPixmap, QTextCursor, QDesktopServices
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -31,11 +31,14 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QFileDialog,
     QMenu,
+    QLineEdit,
+    QDialogButtonBox,
 )
 
 from backend.hwp.hwp_controller import HwpController, HwpControllerError
 from backend.hwp.script_runner import HwpScriptRunner
 from backend.chatgpt_helper import ChatGPTHelper
+from backend.backup_manager import BackupManager
 
 
 class AIWorker(QObject):
@@ -281,6 +284,7 @@ class MainWindow(QMainWindow):
         self.sr_worker: Optional[SpeechRecognitionWorker] = None
         self.dark_mode = True
         self.chatgpt = ChatGPTHelper()
+        self.backup_manager = BackupManager()  # Initialize backup manager
         self.selected_files: list[str] = []  # Track selected files/images
         self._last_hwp_filename = "한글 문서"  # Track last known HWP filename
         self._hwp_detection_timer = QTimer()
@@ -347,6 +351,13 @@ class MainWindow(QMainWindow):
                 f"{icon_key}_{theme_suffix}.png",
                 f"{icon_key}.png",
             ]
+            # Prefer explicit black variant in light mode for better contrast
+            if not self.dark_mode:
+                candidates = [
+                    f"{icon_key}_black.png",
+                    f"{icon_key}-black.png",
+                    *candidates,
+                ]
         else:
             candidates = [
                 f"{icon_key}.png",
@@ -723,6 +734,15 @@ class MainWindow(QMainWindow):
         self._apply_button_icon(self.load_btn, "load", "[L]", QSize(32, 32))
         self.load_btn.clicked.connect(self._load_script)
 
+        # Backup button
+        self.backup_icon_btn = QToolButton()
+        self.backup_icon_btn.setObjectName("pin-button")
+        self.backup_icon_btn.setToolTip("백업 및 복원")
+        self.backup_icon_btn.setAutoRaise(True)
+        self.backup_icon_btn.setText("[B]")
+        self._apply_button_icon_themed(self.backup_icon_btn, "backup_icon", "[B]", QSize(32, 32))
+        self.backup_icon_btn.clicked.connect(self._show_backup_menu)
+
         # Theme button
         self.theme_btn = QToolButton()
         self.theme_btn.setObjectName("pin-button")
@@ -743,6 +763,7 @@ class MainWindow(QMainWindow):
 
         lyt.addWidget(self.save_btn, alignment=Qt.AlignmentFlag.AlignTop)
         lyt.addWidget(self.load_btn, alignment=Qt.AlignmentFlag.AlignTop)
+        lyt.addWidget(self.backup_icon_btn, alignment=Qt.AlignmentFlag.AlignTop)
         lyt.addWidget(self.theme_btn, alignment=Qt.AlignmentFlag.AlignTop)
         lyt.addStretch()
         lyt.addWidget(self.settings_btn, alignment=Qt.AlignmentFlag.AlignBottom)
@@ -814,7 +835,6 @@ class MainWindow(QMainWindow):
             
             # Try .jpg first, then .png
             logo_paths = [
-                assets_dir / "formulite_logo.jpg",
                 assets_dir / "formulite_logo.png"
             ]
             
@@ -847,6 +867,7 @@ class MainWindow(QMainWindow):
         self._apply_help_button_style()
         self._apply_button_icon(self.save_btn, "save", "[S]", QSize(32, 32))
         self._apply_button_icon(self.load_btn, "load", "[L]", QSize(32, 32))
+        self._apply_button_icon_themed(self.backup_icon_btn, "backup_icon", "[B]", QSize(32, 32))
         self._set_theme_glyph(self.dark_mode)
         self._set_settings_glyph()
         if hasattr(self, "template_buttons"):
@@ -1232,6 +1253,27 @@ class MainWindow(QMainWindow):
             450,
             dark_mode=self.dark_mode,
             icon_path=self._get_icon_path_str("info"),
+        )
+        msg.exec()
+
+    def _show_warning_dialog(self, title: str, message: str) -> None:
+        """Show warning dialog."""
+        warning_content = f"""
+<div class="warning-container">
+    <span class="warning-title">{title}</span>
+    
+    <div class="warning-message">
+        {message}
+    </div>
+</div>
+"""
+        msg = _create_styled_dialog(
+            self,
+            title,
+            warning_content,
+            400,
+            dark_mode=self.dark_mode,
+            icon_path=self._get_icon_path_str("warning"),
         )
         msg.exec()
 
@@ -1629,9 +1671,8 @@ class MainWindow(QMainWindow):
         """Show settings dialog."""
         settings_icon = self._get_icon_path_str("settings") or ""
         settings_content = f"""
-    <div style='display: flex; align-items: center; gap: 12px; margin-bottom: 20px;'>
-        <span style='font-size: 20px; flex-shrink: 0;'>⚙️</span>
-        <h2 style='font-size: 20px; margin: 0; padding: 0;'>설정</h2>
+    <div style='margin-bottom: 20px;'>
+        <h2 style='font-size: 20px; margin: 0; padding: 0;'>⚙️ 설정</h2>
     </div>
 
     <div class="setting-section">
@@ -1659,7 +1700,7 @@ class MainWindow(QMainWindow):
 """
         msg = _create_styled_dialog(
             self,
-            "설정",
+            "⚙️ 설정",
             settings_content,
             550,
             dark_mode=self.dark_mode,
@@ -2092,6 +2133,573 @@ class MainWindow(QMainWindow):
         self.run_button.setEnabled(True)
         self.ai_generate_button.setEnabled(True)
         self.ai_optimize_button.setEnabled(True)
+
+    def _show_backup_menu(self) -> None:
+        """Show backup menu with options."""
+        menu = QMenu(self)
+        menu.setMinimumWidth(250)
+        
+        # Apply custom styling based on theme
+        if self.dark_mode:
+            menu.setStyleSheet("""
+                QMenu {
+                    background-color: #1a1a1a;
+                    border: 1px solid #4a4a4a;
+                    border-radius: 8px;
+                    padding: 8px;
+                    color: #e8e8e8;
+                    font-size: 13px;
+                }
+                QMenu::item {
+                    background-color: transparent;
+                    padding: 10px 20px;
+                    border-radius: 6px;
+                    margin: 2px 4px;
+                }
+                QMenu::item:selected {
+                    background-color: #2a2a2a;
+                    color: #ffffff;
+                }
+                QMenu::item:pressed {
+                    background-color: #3a3a3a;
+                }
+                QMenu::separator {
+                    height: 1px;
+                    background-color: #4a4a4a;
+                    margin: 8px 12px;
+                }
+                QMenu::icon {
+                    padding-left: 10px;
+                }
+            """)
+        else:
+            menu.setStyleSheet("""
+                QMenu {
+                    background-color: #ffffff;
+                    border: 1px solid #d1d5db;
+                    border-radius: 8px;
+                    padding: 8px;
+                    color: #2c2c2c;
+                    font-size: 13px;
+                }
+                QMenu::item {
+                    background-color: transparent;
+                    padding: 10px 20px;
+                    border-radius: 6px;
+                    margin: 2px 4px;
+                }
+                QMenu::item:selected {
+                    background-color: #f3f4f6;
+                    color: #000000;
+                }
+                QMenu::item:pressed {
+                    background-color: #e5e7eb;
+                }
+                QMenu::separator {
+                    height: 1px;
+                    background-color: #d1d5db;
+                    margin: 8px 12px;
+                }
+                QMenu::icon {
+                    padding-left: 10px;
+                }
+            """)
+        
+        # Backup current script
+        backup_script_action = menu.addAction("💾 현재 스크립트 백업")
+        backup_script_action.triggered.connect(self._backup_current_script)
+        
+        # Backup session
+        backup_session_action = menu.addAction("📦 세션 백업 (스크립트 + 출력)")
+        backup_session_action.triggered.connect(self._backup_session)
+        
+        menu.addSeparator()
+        
+        # Restore script
+        restore_script_action = menu.addAction("📄 스크립트 복원...")
+        restore_script_action.triggered.connect(self._restore_script_dialog)
+        
+        # Restore session
+        restore_session_action = menu.addAction("🔄 세션 복원...")
+        restore_session_action.triggered.connect(self._restore_session_dialog)
+        
+        menu.addSeparator()
+        
+        # View backup info
+        view_backups_action = menu.addAction("ℹ️  백업 정보 보기")
+        view_backups_action.triggered.connect(self._show_backup_info)
+        
+        # Show menu at button position
+        menu.exec(self.backup_icon_btn.mapToGlobal(self.backup_icon_btn.rect().bottomLeft()))
+    
+    def _backup_current_script(self) -> None:
+        """Create a backup of the current script."""
+        script_content = self.script_edit.toPlainText()
+        if not script_content.strip():
+            self._show_warning_dialog("백업 실패", "백업할 스크립트가 없습니다.")
+            return
+        
+        # Get custom name from user
+        from datetime import datetime
+        default_name = datetime.now().strftime("%Y%m%d_%H%M%S")
+        custom_name, ok = self._get_text_input(
+            "스크립트 백업",
+            f"백업 이름을 입력하세요\n(비워두면 '{default_name}'으로 저장됩니다)",
+            enable_voice=False
+        )
+        
+        if not ok:
+            return
+        
+        custom_name = custom_name.strip() or default_name
+        
+        try:
+            backup_file = self.backup_manager.backup_script(script_content, "script", custom_name)
+            file_size_kb = backup_file.stat().st_size / 1024
+            backup_dir = backup_file.parent
+            
+            dialog = QDialog(self)
+            dialog.setWindowTitle("스크립트 백업")
+            dialog.setMinimumWidth(500)
+            layout = QVBoxLayout(dialog)
+            
+            title = QLabel("✅ 백업이 완료되었습니다")
+            title.setStyleSheet("font-size:16px; font-weight:700;")
+            layout.addWidget(title)
+            
+            grid = QWidget()
+            gl = QGridLayout(grid)
+            gl.setHorizontalSpacing(10)
+            gl.setVerticalSpacing(8)
+            lbl_color = "#999" if self.dark_mode else "#6b7280"
+            val_color = "#e8e8e8" if self.dark_mode else "#2c2c2c"
+            gl.addWidget(QLabel(f"<span style='font-weight:600; color:{lbl_color}'>파일명</span>"), 0, 0)
+            gl.addWidget(QLabel(f"<span style='color:{val_color}'>{backup_file.name}</span>"), 0, 1)
+            gl.addWidget(QLabel(f"<span style='font-weight:600; color:{lbl_color}'>크기</span>"), 1, 0)
+            gl.addWidget(QLabel(f"<span style='color:{val_color}'>{file_size_kb:.2f} KB</span>"), 1, 1)
+            layout.addWidget(grid)
+            
+            row = QWidget()
+            row_lyt = QHBoxLayout(row)
+            row_lyt.setContentsMargins(0, 8, 0, 0)
+            row_lyt.setSpacing(8)
+            label = QLabel("백업 위치")
+            label.setStyleSheet(f"font-weight:600; color:{lbl_color};")
+            row_lyt.addWidget(label)
+            path_edit = QLineEdit(str(backup_dir))
+            path_edit.setReadOnly(True)
+            path_edit.setStyleSheet("font-size:12px;")
+            row_lyt.addWidget(path_edit, 1)
+            menu_btn = QToolButton()
+            menu_btn.setText("⋯")
+            menu_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+            menu_btn.setStyleSheet("""
+                QToolButton { border:1px solid #d1d5db; border-radius:6px; padding:4px 8px; background:transparent; font-size:16px; font-weight:bold; }
+                QToolButton:hover { background:#f3f4f6; border-color:#9ca3af; }
+                QToolButton:pressed { background:#e5e7eb; }
+            """ if not self.dark_mode else """
+                QToolButton { border:1px solid #4a4a4a; border-radius:6px; padding:4px 8px; background:transparent; font-size:16px; font-weight:bold; }
+                QToolButton:hover { background:#2a2a2a; border-color:#6b7280; }
+                QToolButton:pressed { background:#1a1a1a; }
+            """)
+            menu = QMenu(menu_btn)
+            menu_style = "QMenu { padding:8px; border:1px solid #d1d5db; border-radius:8px; background:#ffffff; } QMenu::item { padding:8px 12px; border-radius:4px; } QMenu::item:selected { background:#e5e7eb; }" if not self.dark_mode else "QMenu { padding:8px; border:1px solid #4a4a4a; border-radius:8px; background:#1a1a1a; } QMenu::item { padding:8px 12px; border-radius:4px; } QMenu::item:selected { background:#2a2a2a; }"
+            menu.setStyleSheet(menu_style)
+            open_action = menu.addAction("📂 Finder에서 열기")
+            copy_action = menu.addAction("📋 경로 복사")
+            menu_btn.setMenu(menu)
+            row_lyt.addWidget(menu_btn)
+            layout.addWidget(row)
+            
+            def open_in_finder() -> None:
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(backup_dir)))
+            def copy_path() -> None:
+                QApplication.clipboard().setText(str(backup_dir))
+            open_action.triggered.connect(open_in_finder)
+            copy_action.triggered.connect(copy_path)
+            path_edit.mousePressEvent = lambda e: open_in_finder()
+            
+            tip = QLabel("💡 백업 메뉴에서 언제든지 복원할 수 있습니다")
+            tip.setStyleSheet(f"font-size:12px; color:{lbl_color};")
+            layout.addWidget(tip)
+            
+            btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
+            layout.addWidget(btns)
+            btns.accepted.connect(dialog.accept)
+            dialog.exec()
+        except Exception as e:
+            self._show_error_dialog(f"백업 실패:\n{str(e)}")
+    
+    def _backup_session(self) -> None:
+        """Create a backup of the current session (script + output)."""
+        script_content = self.script_edit.toPlainText()
+        output_content = self.log_output.toPlainText()
+        
+        if not script_content.strip() and not output_content.strip():
+            self._show_warning_dialog("백업 실패", "백업할 내용이 없습니다.")
+            return
+        
+        # Get custom name from user
+        from datetime import datetime
+        default_name = datetime.now().strftime("%Y%m%d_%H%M%S")
+        custom_name, ok = self._get_text_input(
+            "세션 백업",
+            f"백업 이름을 입력하세요\n(비워두면 '{default_name}'으로 저장됩니다)",
+            enable_voice=False
+        )
+        
+        if not ok:
+            return
+        
+        custom_name = custom_name.strip() or default_name
+        
+        try:
+            session_data = {
+                "script": script_content,
+                "output": output_content,
+                "timestamp": None  # Will be set by backup_manager
+            }
+            backup_file = self.backup_manager.backup_session(session_data, custom_name)
+            file_size_kb = backup_file.stat().st_size / 1024
+            backup_dir = backup_file.parent
+            
+            dialog = QDialog(self)
+            dialog.setWindowTitle("세션 백업")
+            dialog.setMinimumWidth(500)
+            layout = QVBoxLayout(dialog)
+            
+            title = QLabel("✅ 백업이 완료되었습니다")
+            title.setStyleSheet("font-size:16px; font-weight:700;")
+            layout.addWidget(title)
+            
+            grid = QWidget()
+            gl = QGridLayout(grid)
+            gl.setHorizontalSpacing(10)
+            gl.setVerticalSpacing(8)
+            lbl_color = "#999" if self.dark_mode else "#6b7280"
+            val_color = "#e8e8e8" if self.dark_mode else "#2c2c2c"
+            gl.addWidget(QLabel(f"<span style='font-weight:600; color:{lbl_color}'>파일명</span>"), 0, 0)
+            gl.addWidget(QLabel(f"<span style='color:{val_color}'>{backup_file.name}</span>"), 0, 1)
+            gl.addWidget(QLabel(f"<span style='font-weight:600; color:{lbl_color}'>크기</span>"), 1, 0)
+            gl.addWidget(QLabel(f"<span style='color:{val_color}'>{file_size_kb:.2f} KB</span>"), 1, 1)
+            layout.addWidget(grid)
+            
+            row = QWidget()
+            row_lyt = QHBoxLayout(row)
+            row_lyt.setContentsMargins(0, 8, 0, 0)
+            row_lyt.setSpacing(8)
+            label = QLabel("백업 위치")
+            label.setStyleSheet(f"font-weight:600; color:{lbl_color};")
+            row_lyt.addWidget(label)
+            path_edit = QLineEdit(str(backup_dir))
+            path_edit.setReadOnly(True)
+            path_edit.setStyleSheet("font-size:12px;")
+            row_lyt.addWidget(path_edit, 1)
+            menu_btn = QToolButton()
+            menu_btn.setText("⋯")
+            menu_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+            menu_btn.setStyleSheet("""
+                QToolButton { border:1px solid #d1d5db; border-radius:6px; padding:4px 8px; background:transparent; font-size:16px; font-weight:bold; }
+                QToolButton:hover { background:#f3f4f6; border-color:#9ca3af; }
+                QToolButton:pressed { background:#e5e7eb; }
+            """ if not self.dark_mode else """
+                QToolButton { border:1px solid #4a4a4a; border-radius:6px; padding:4px 8px; background:transparent; font-size:16px; font-weight:bold; }
+                QToolButton:hover { background:#2a2a2a; border-color:#6b7280; }
+                QToolButton:pressed { background:#1a1a1a; }
+            """)
+            menu = QMenu(menu_btn)
+            menu_style = "QMenu { padding:8px; border:1px solid #d1d5db; border-radius:8px; background:#ffffff; } QMenu::item { padding:8px 12px; border-radius:4px; } QMenu::item:selected { background:#e5e7eb; }" if not self.dark_mode else "QMenu { padding:8px; border:1px solid #4a4a4a; border-radius:8px; background:#1a1a1a; } QMenu::item { padding:8px 12px; border-radius:4px; } QMenu::item:selected { background:#2a2a2a; }"
+            menu.setStyleSheet(menu_style)
+            open_action = menu.addAction(" 파일 탐색기에서 열기")
+            copy_action = menu.addAction(" 경로 복사")
+            menu_btn.setMenu(menu)
+            row_lyt.addWidget(menu_btn)
+            layout.addWidget(row)
+            
+            def open_in_finder() -> None:
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(backup_dir)))
+            def copy_path() -> None:
+                QApplication.clipboard().setText(str(backup_dir))
+            open_action.triggered.connect(open_in_finder)
+            copy_action.triggered.connect(copy_path)
+            path_edit.mousePressEvent = lambda e: open_in_finder()
+            
+            tip = QLabel("📝 스크립트와 출력이 함께 저장되었습니다 · 💡 세션 복원 메뉴에서 복원할 수 있습니다")
+            tip.setStyleSheet(f"font-size:12px; color:{lbl_color};")
+            layout.addWidget(tip)
+            
+            btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
+            layout.addWidget(btns)
+            btns.accepted.connect(dialog.accept)
+            dialog.exec()
+        except Exception as e:
+            self._show_error_dialog(f"세션 백업 실패:\n{str(e)}")
+    
+    def _restore_script_dialog(self) -> None:
+        """Show dialog to restore a backed up script."""
+        try:
+            backups = self.backup_manager.get_recent_backups("scripts", limit=20)
+            if not backups:
+                self._show_warning_dialog("복원 실패", "백업된 스크립트가 없습니다.")
+                return
+            
+            # Create a simple selection dialog
+            dialog = QDialog(self)
+            dialog.setWindowTitle("스크립트 복원")
+            dialog.setMinimumWidth(400)
+            layout = QVBoxLayout(dialog)
+            
+            # List of backups
+            backup_list_widget = QWidget()
+            backup_list_layout = QVBoxLayout(backup_list_widget)
+            
+            selected_backup: list[Path] = []
+            
+            for backup_file in backups:
+                info = self.backup_manager.get_backup_info(backup_file)
+                display_text = f"📄 {info['custom_name']}\n🕒 {info['formatted_time']}"
+                btn = QPushButton(display_text)
+                btn.setObjectName("primary-action")
+                btn.setMinimumHeight(50)
+                btn.setStyleSheet("text-align: left; padding: 10px;")
+                btn.clicked.connect(lambda checked, bf=backup_file: selected_backup.append(bf))
+                backup_list_layout.addWidget(btn)
+            
+            layout.addWidget(backup_list_widget)
+            
+            # Buttons
+            button_layout = QHBoxLayout()
+            cancel_btn = QPushButton("취소")
+            cancel_btn.clicked.connect(dialog.reject)
+            ok_btn = QPushButton("복원")
+            ok_btn.setObjectName("primary-action")
+            ok_btn.clicked.connect(dialog.accept)
+            button_layout.addWidget(cancel_btn)
+            button_layout.addWidget(ok_btn)
+            layout.addLayout(button_layout)
+            
+            if dialog.exec():
+                if selected_backup:
+                    try:
+                        content = self.backup_manager.restore_backup(selected_backup[-1])
+                        if isinstance(content, str):
+                            self.script_edit.setPlainText(content)
+                        self._show_info_dialog("복원 완료", "스크립트가 복원되었습니다.")
+                    except Exception as e:
+                        self._show_error_dialog(f"복원 실패:\n{str(e)}")
+        except Exception as e:
+            self._show_error_dialog(f"백업 로드 실패:\n{str(e)}")
+    
+    def _restore_session_dialog(self) -> None:
+        """Show dialog to restore a backed up session."""
+        try:
+            backups = self.backup_manager.get_recent_backups("sessions", limit=20)
+            if not backups:
+                self._show_warning_dialog("복원 실패", "백업된 세션이 없습니다.")
+                return
+            
+            # Create a simple selection dialog
+            dialog = QDialog(self)
+            dialog.setWindowTitle("세션 복원")
+            dialog.setMinimumWidth(400)
+            layout = QVBoxLayout(dialog)
+            
+            # List of backups
+            backup_list_widget = QWidget()
+            backup_list_layout = QVBoxLayout(backup_list_widget)
+            
+            selected_backup: list[Path] = []
+            
+            for backup_file in backups:
+                info = self.backup_manager.get_backup_info(backup_file)
+                display_text = f"📦 {info['custom_name']}\n🕒 {info['formatted_time']}"
+                btn = QPushButton(display_text)
+                btn.setObjectName("primary-action")
+                btn.setMinimumHeight(50)
+                btn.setStyleSheet("text-align: left; padding: 10px;")
+                btn.clicked.connect(lambda checked, bf=backup_file: selected_backup.append(bf))
+                backup_list_layout.addWidget(btn)
+            
+            layout.addWidget(backup_list_widget)
+            
+            # Buttons
+            button_layout = QHBoxLayout()
+            cancel_btn = QPushButton("취소")
+            cancel_btn.clicked.connect(dialog.reject)
+            ok_btn = QPushButton("복원")
+            ok_btn.setObjectName("primary-action")
+            ok_btn.clicked.connect(dialog.accept)
+            button_layout.addWidget(cancel_btn)
+            button_layout.addWidget(ok_btn)
+            layout.addLayout(button_layout)
+            
+            if dialog.exec():
+                if selected_backup:
+                    try:
+                        content = self.backup_manager.restore_backup(selected_backup[-1])
+                        if isinstance(content, dict):
+                            self.script_edit.setPlainText(content.get("script", ""))
+                            self.log_output.setPlainText(content.get("output", ""))
+                        self._show_info_dialog("복원 완료", "세션이 복원되었습니다.")
+                    except Exception as e:
+                        self._show_error_dialog(f"복원 실패:\n{str(e)}")
+        except Exception as e:
+            self._show_error_dialog(f"백업 로드 실패:\n{str(e)}")
+
+    def _show_backup_info(self) -> None:
+        """Show backup statistics and information with enhanced design and context menu."""
+        try:
+            stats = self.backup_manager.get_all_backup_stats()
+            scripts_count = stats['scripts']['count']
+            sessions_count = stats['sessions']['count']
+            scripts_size_kb = stats['scripts']['total_size'] / 1024 if scripts_count else 0
+            sessions_size_kb = stats['sessions']['total_size'] / 1024 if sessions_count else 0
+            backup_dir = Path(stats['backup_dir'])
+
+            dialog = QDialog(self)
+            dialog.setWindowTitle("백업 정보")
+            dialog.setMinimumWidth(520)
+            layout = QVBoxLayout(dialog)
+
+            # Title
+            title = QLabel("ℹ️ 백업 정보")
+            title.setStyleSheet("font-size:16px; font-weight:700;")
+            layout.addWidget(title)
+
+            # Cards container
+            cards = QWidget()
+            cards_lyt = QHBoxLayout(cards)
+            cards_lyt.setSpacing(12)
+            cards_lyt.setContentsMargins(0, 8, 0, 0)
+
+            def make_card(name: str, count: int, size_kb: float) -> QWidget:
+                w = QWidget()
+                l = QVBoxLayout(w)
+                l.setContentsMargins(12, 12, 12, 12)
+                l.setSpacing(8)
+                w.setStyleSheet("border:none; border-radius:10px;")
+                head = QLabel(name)
+                head.setStyleSheet("font-weight:700; margin-bottom:4px;")
+                l.addWidget(head)
+                grid = QWidget()
+                gl = QGridLayout(grid)
+                gl.setHorizontalSpacing(10)
+                gl.setVerticalSpacing(8)
+                lbl_color = "#999" if self.dark_mode else "#6b7280"
+                val_color = "#e8e8e8" if self.dark_mode else "#2c2c2c"
+                gl.addWidget(QLabel(f"<span style='color:{lbl_color}'>개수</span>"), 0, 0)
+                gl.addWidget(QLabel(f"<span style='color:{val_color}'>{count}개</span>"), 0, 1)
+                gl.addWidget(QLabel(f"<span style='color:{lbl_color}'>용량</span>"), 1, 0)
+                gl.addWidget(QLabel(f"<span style='color:{val_color}'>{size_kb:.2f} KB</span>"), 1, 1)
+                l.addWidget(grid)
+                return w
+
+            cards_lyt.addWidget(make_card("💾 스크립트", scripts_count, scripts_size_kb))
+            cards_lyt.addWidget(make_card("📦 세션", sessions_count, sessions_size_kb))
+            layout.addWidget(cards)
+
+            # Backup path row
+            row = QWidget()
+            row_lyt = QHBoxLayout(row)
+            row_lyt.setContentsMargins(0, 8, 0, 0)
+            row_lyt.setSpacing(8)
+            label = QLabel("백업 위치")
+            label.setStyleSheet("font-weight:600; color:#6b7280;")
+            row_lyt.addWidget(label)
+
+            path_edit = QLineEdit(str(backup_dir))
+            path_edit.setReadOnly(True)
+            path_edit.setStyleSheet("font-size:12px;")
+            row_lyt.addWidget(path_edit, 1)
+
+            # Context menu button
+            menu_btn = QToolButton()
+            menu_btn.setText("⋯")
+            menu_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+            menu_btn.setStyleSheet("""
+                QToolButton {
+                    border: 1px solid #d1d5db;
+                    border-radius: 6px;
+                    padding: 4px 8px;
+                    background: transparent;
+                    font-size: 16px;
+                    font-weight: bold;
+                }
+                QToolButton:hover {
+                    background: #f3f4f6;
+                    border-color: #9ca3af;
+                }
+                QToolButton:pressed {
+                    background: #e5e7eb;
+                }
+            """ if not self.dark_mode else """
+                QToolButton {
+                    border: 1px solid #4a4a4a;
+                    border-radius: 6px;
+                    padding: 4px 8px;
+                    background: transparent;
+                    font-size: 16px;
+                    font-weight: bold;
+                }
+                QToolButton:hover {
+                    background: #2a2a2a;
+                    border-color: #6b7280;
+                }
+                QToolButton:pressed {
+                    background: #1a1a1a;
+                }
+            """)
+            menu = QMenu(menu_btn)
+            menu_style = "QMenu { padding:8px; border:1px solid #d1d5db; border-radius:8px; background:#ffffff; } QMenu::item { padding:8px 12px; border-radius:4px; } QMenu::item:selected { background:#e5e7eb; }" if not self.dark_mode else "QMenu { padding:8px; border:1px solid #4a4a4a; border-radius:8px; background:#1a1a1a; } QMenu::item { padding:8px 12px; border-radius:4px; } QMenu::item:selected { background:#2a2a2a; }"
+            menu.setStyleSheet(menu_style)
+            open_action = menu.addAction("📂 Finder에서 열기")
+            copy_action = menu.addAction("📋 경로 복사")
+            menu_btn.setMenu(menu)
+            row_lyt.addWidget(menu_btn)
+            layout.addWidget(row)
+
+            # Tip
+            tip = QLabel("💡 백업 수가 많아지면 오래된 항목은 정리하세요")
+            tip.setStyleSheet("font-size:12px; color:#6b7280;")
+            layout.addWidget(tip)
+
+            # Wire actions
+            def open_in_finder() -> None:
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(backup_dir)))
+            def copy_path() -> None:
+                QApplication.clipboard().setText(str(backup_dir))
+            open_action.triggered.connect(open_in_finder)
+            copy_action.triggered.connect(copy_path)
+
+            # Also open on path click
+            path_edit.mousePressEvent = lambda e: open_in_finder()
+
+            # Buttons
+            btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
+            btns.setStyleSheet("""
+                QPushButton {
+                    background-color: #5377f6;
+                    color: white;
+                    border: none;
+                    border-radius: 8px;
+                    padding: 8px 24px;
+                    font-size: 13px;
+                    font-weight: 600;
+                    min-width: 80px;
+                }
+                QPushButton:hover {
+                    background-color: #3e5fc7;
+                }
+                QPushButton:pressed {
+                    background-color: #2e47a0;
+                }
+            """)
+            layout.addWidget(btns)
+            btns.accepted.connect(dialog.accept)
+
+            dialog.exec()
+        except Exception as e:
+            self._show_error_dialog(f"백업 정보 로드 실패:\n{str(e)}")
 
     def _update_hwp_filename(self) -> None:
         """Automatically detect and update the currently open HWP document filename."""
