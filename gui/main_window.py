@@ -5,6 +5,8 @@ from __future__ import annotations
 import platform
 from pathlib import Path
 from typing import Optional
+import uuid
+import time
 
 # Optional speech recognition
 try:
@@ -12,8 +14,8 @@ try:
 except ImportError:  # pragma: no cover - optional dependency
     sr = None  # type: ignore[assignment]
 
-from PySide6.QtCore import Qt, Signal, QThread, QObject, QSize, QTimer, QPropertyAnimation, QEasingCurve, QPoint, QUrl
-from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QPainter, QPixmap, QTextCursor, QDesktopServices
+from PySide6.QtCore import Qt, Signal, QThread, QObject, QSize, QTimer, QPropertyAnimation, QEasingCurve, QPoint, QUrl, QRect
+from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QPainter, QPixmap, QTextCursor, QDesktopServices, QCursor, QPen, QPainterPath, QImage
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -31,9 +33,15 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QFileDialog,
     QMenu,
+    QInputDialog,
     QLineEdit,
+    QSizePolicy,
     QDialogButtonBox,
+    QGraphicsDropShadowEffect,
+    QCheckBox,
 )
+
+from . import design
 
 from backend.hwp.hwp_controller import HwpController, HwpControllerError
 from backend.hwp.script_runner import HwpScriptRunner
@@ -136,66 +144,18 @@ class SpeechRecognitionWorker(QThread):
 
 
 def _load_dialog_css() -> str:
-    """Load external CSS file for dialogs."""
-    css_path = Path(__file__).parent / "styles" / "dialog_styles.css"
-    if css_path.exists():
-        return css_path.read_text(encoding='utf-8')
-    return ""
+    """Load external CSS file for dialogs (delegates to gui.design)."""
+    return design.load_dialog_css()
+
 
 def _load_theme(theme_name: str) -> str:
-    """Load external QSS theme file."""
-    qss_path = Path(__file__).parent / "styles" / f"{theme_name}_theme.qss"
-    if qss_path.exists():
-        return qss_path.read_text(encoding='utf-8')
-    return ""
+    """Load external QSS theme file (delegates to gui.design)."""
+    return design.load_theme(theme_name)
+
 
 def _create_styled_dialog(parent, title: str, content: str, min_width: int = 500, min_height: int = 0, dark_mode: bool = False, icon_path: str | None = None) -> QMessageBox:
-    """Create a styled dialog with enhanced OK button."""
-    css = _load_dialog_css()
-    dark_class = "dark-mode" if dark_mode else ""
-    full_html = f"<style>{css}</style><body class='{dark_class}'>{content}</body>"
-    
-    msg = QMessageBox(parent)
-    msg.setWindowTitle(title)
-    msg.setTextFormat(Qt.TextFormat.RichText)
-    msg.setText(full_html)
-    if icon_path:
-        msg.setIconPixmap(QPixmap(icon_path).scaled(32, 32, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
-    if icon_path:
-        pix = QPixmap(icon_path)
-        if not pix.isNull():
-            msg.setIconPixmap(pix.scaled(48, 48, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
-        else:
-            msg.setIcon(QMessageBox.Icon.NoIcon)
-    else:
-        msg.setIcon(QMessageBox.Icon.NoIcon)
-    msg.setStandardButtons(QMessageBox.StandardButton.Ok)
-    
-    # Apply QSS styling to the OK button
-    button_style = """
-        QPushButton {
-            background-color: #5377f6;
-            color: white;
-            border: none;
-            border-radius: 8px;
-            padding: 8px 24px;
-            font-size: 13px;
-            font-weight: 600;
-            min-width: 80px;
-        }
-        QPushButton:hover {
-            background-color: #3e5fc7;
-        }
-        QPushButton:pressed {
-            background-color: #2e47a0;
-        }
-    """
-    msg.setStyleSheet(button_style)
-    
-    msg.setMinimumWidth(min_width)
-    if min_height > 0:
-        msg.setMinimumHeight(min_height)
-    
+    """Create a styled dialog (delegates to gui.design)."""
+    return design.create_styled_dialog(parent, title, content, min_width=min_width, min_height=min_height, dark_mode=dark_mode, icon_path=icon_path)
     return msg
 
 DEFAULT_SCRIPT = """
@@ -278,13 +238,34 @@ class ScriptWorker(QThread):
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("FormuLite")
-        self.resize(900, 900)
+        self.setWindowTitle("Nova AI")
+        # Narrow, mobile-like initial window (portrait ratio)
+        # Taller initial height for better sidebar display
+        self.resize(420, 920)
+        self.setMinimumWidth(320)
+        self.setMinimumHeight(700)
         self._worker: Optional[ScriptWorker] = None
         self.sr_worker: Optional[SpeechRecognitionWorker] = None
-        self.dark_mode = True
+        # Default to light theme (pure white background)
+        self.dark_mode = False
         self.chatgpt = ChatGPTHelper()
         self.backup_manager = BackupManager()  # Initialize backup manager
+        # Profile defaults (ensure drawer/profile UI can be built safely)
+        self.profile_display_name = "사용자"
+        self.profile_handle = ""
+        self.profile_plan = "Free"
+        # Drawer state
+        self._drawer_open = False
+        # Simple in-memory chat store and UI helpers
+        self._chats: list[dict] = []
+        self._current_chat_id: str | None = None
+        self._chat_filter = ""
+        # Debounced persist timer for chat store
+        self._persist_timer = QTimer()
+        self._persist_timer.setSingleShot(True)
+        self._persist_timer.timeout.connect(lambda: self._persist_chats())
+        # Drawer in-panel popup (used for profile/backup menus)
+        self._drawer_popup: QFrame | None = None
         self.selected_files: list[str] = []  # Track selected files/images
         self._last_hwp_filename = "한글 문서"  # Track last known HWP filename
         self._hwp_detection_timer = QTimer()
@@ -294,9 +275,483 @@ class MainWindow(QMainWindow):
         self._progress_fade_count = 0  # Frame counter for fade animation (0-9)
         self._progress_timer = QTimer()
         self._progress_timer.timeout.connect(self._animate_progress_fade)
+        # Drawer animation object (persisted to avoid GC & make single-click reliable)
+        self._drawer_anim: QPropertyAnimation | None = None
         self._build_ui()
         self._apply_styles()
+        # Apply responsive UI tweaks immediately and on resize
+        self._apply_responsive_layout()
         self._hwp_detection_timer.start(500)  # Check every 500ms
+
+    def _snapshot_current_chat(self) -> None:
+        """Save brief snapshot of the currently active chat into the in-memory store.
+
+        This is intentionally lightweight and tolerant — used before creating a new
+        chat so we don't lose the current editor/log state.
+        """
+        try:
+            if not self._current_chat_id:
+                return
+            for chat in self._chats:
+                if chat.get("id") == self._current_chat_id:
+                    chat["script"] = getattr(self, "script_edit", None).toPlainText() if hasattr(self, "script_edit") else chat.get("script", "")
+                    chat["log"] = getattr(self, "log_output", None).toPlainText() if hasattr(self, "log_output") else chat.get("log", "")
+                    chat["updated_at"] = time.time()
+                    return
+            # If no existing chat matches, append one
+            self._chats.insert(0, {
+                "id": self._current_chat_id,
+                "title": "Saved chat",
+                "log": getattr(self, "log_output", None).toPlainText() if hasattr(self, "log_output") else "",
+                "script": getattr(self, "script_edit", None).toPlainText() if hasattr(self, "script_edit") else "",
+                "created_at": time.time(),
+                "updated_at": time.time(),
+            })
+        except Exception:
+            # Be defensive — snapshot failure should not crash the UI
+            pass
+
+    def _schedule_persist(self) -> None:
+        """Schedule a debounced persist of the chat store to disk (no-op quick save).
+
+        The real persistence layer can be added later; for now we keep a lightweight
+        on-disk JSON so state survives simple restarts during development.
+        """
+        try:
+            self._persist_timer.start(400)
+        except Exception:
+            pass
+
+    def _persist_chats(self) -> None:
+        """Persist the in-memory chat store to a file under the user's home dir.
+
+        This is a best-effort implementation to avoid raising exceptions during
+        UI operations.
+        """
+        try:
+            storage = Path.home() / ".formulite_chats.json"
+            import json
+            data = {"chats": self._chats, "current": self._current_chat_id}
+            storage.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception as e:
+            print(f"[Persist] Failed to write chats: {e}")
+
+    def _render_chat_list(self) -> None:
+        """Render the simple chat list inside the drawer (if present)."""
+        try:
+            if not hasattr(self, "drawer_chat_list_layout"):
+                return
+            # Update visibility of reset button depending on active filter
+            try:
+                if getattr(self, 'drawer_reset_btn', None):
+                    self.drawer_reset_btn.setVisible(bool(self._chat_filter))
+            except Exception:
+                pass
+            # Clear existing items
+            layout = self.drawer_chat_list_layout
+            while layout.count():
+                item = layout.takeAt(0)
+                widget = item.widget()
+                if widget:
+                    widget.deleteLater()
+            # Apply filter
+            # If there are no chats yet, seed a set of placeholder chats to match the expected sidebar look
+            if not self._chats and not getattr(self, '_seeded_chats', False):
+                import uuid as _uuid
+                now = time.time()
+                for _ in range(12):
+                    cid = str(_uuid.uuid4())
+                    self._chats.append({
+                        'id': cid,
+                        'title': 'New chat',
+                        'log': '',
+                        'script': DEFAULT_SCRIPT.strip(),
+                        'created_at': now,
+                        'updated_at': now,
+                    })
+                self._seeded_chats = True
+
+            chats = [c for c in self._chats if (self._chat_filter.lower() in (c.get("title", "").lower()))]
+            for chat in chats:
+                item_wrap = QWidget()
+                item_wrap.setObjectName("drawer-chat-item-wrap")
+                # Prevent chat items from expanding vertically when list is short
+                item_wrap.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+                item_wrap.setFixedHeight(30)
+                item_wrap.setMaximumHeight(30)
+                h = QHBoxLayout(item_wrap)
+                # Slightly tighter wrap padding and spacing for compact sidebar
+                h.setContentsMargins(4, 0, 4, 0)
+                h.setSpacing(10)
+
+                btn = QPushButton(chat.get("title", "Untitled"))
+                btn.setObjectName("drawer-chat-item")
+                btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+                # Adjust height and padding to fit the smaller row and center text vertically
+                btn.setMinimumHeight(28)
+                try:
+                    orig_btn_style = btn.styleSheet() if hasattr(btn, 'styleSheet') else ""
+                    btn.setStyleSheet((orig_btn_style or "") + "padding-top:-5px; padding-left:12px;")
+                except Exception:
+                    pass
+                font = btn.font()
+                font.setPointSize(14)
+                # Use DemiBold weight for slightly lighter emphasis
+                try:
+                    font.setWeight(QFont.Weight.DemiBold)
+                except Exception:
+                    font.setWeight(QFont.Weight.Bold)
+                btn.setFont(font)
+
+                # Active state
+                if chat.get("id") == self._current_chat_id:
+                    btn.setProperty("active", True)
+                else:
+                    btn.setProperty("active", False)
+                # Ensure stylesheet updates when property changes
+                try:
+                    btn.style().unpolish(btn)
+                    btn.style().polish(btn)
+                except Exception:
+                    pass
+
+                def make_activate(cid: str):
+                    return lambda checked=False, cid=cid: self._activate_chat(cid)
+
+                btn.clicked.connect(make_activate(chat.get("id")))
+                h.addWidget(btn)
+
+                # Edit button (shown on hover) - allows renaming the chat
+                edit_btn = QToolButton()
+                edit_btn.setObjectName("drawer-chat-edit")
+                edit_btn.setText("")
+                edit_btn.setToolTip("이름 변경")
+                edit_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                edit_btn.setAutoRaise(False)
+                edit_btn.setFixedSize(28, 28)
+                try:
+                    assets_dir = Path(__file__).resolve().parents[1] / "public" / "img"
+                    # Prefer a dark-mode edit icon when dark mode is enabled
+                    edit_candidate = None
+                    if getattr(self, 'dark_mode', False):
+                        d = assets_dir / "edit-dark.png"
+                        if d.exists():
+                            edit_candidate = d
+                    if edit_candidate is None:
+                        e = assets_dir / "edit.png"
+                        if e.exists():
+                            edit_candidate = e
+                    if edit_candidate is not None:
+                        edit_btn.setIcon(QIcon(str(edit_candidate)))
+                        edit_btn.setIconSize(QSize(18, 18))
+                    else:
+                        self._set_drawer_item_icon(edit_btn, "edit_square", fallback="✎", px=18)
+                except Exception:
+                    try:
+                        self._set_drawer_item_icon(edit_btn, "edit_square", fallback="✎", px=16)
+                    except Exception:
+                        edit_btn.setText("✎")
+                edit_btn.clicked.connect(lambda checked=False, cid=chat.get("id"): self._rename_chat(cid))
+                try:
+                    edit_btn.hide()
+                except Exception:
+                    pass
+                h.addWidget(edit_btn)
+
+                # Delete button (shown on hover via stylesheet)
+                del_btn = QToolButton()
+                del_btn.setObjectName("drawer-chat-delete")
+                del_btn.setText("")
+                del_btn.setToolTip("채팅 삭제")
+                del_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                # Keep consistent look: don't auto-raise so background/border appear when styled
+                del_btn.setAutoRaise(False)
+                # Slightly smaller delete button to match reference
+                del_btn.setFixedSize(28, 28)
+                # Prefer the provided trashcan.png asset; fall back to painted icon if missing
+                try:
+                    assets_dir = Path(__file__).resolve().parents[1] / "public" / "img"
+                    asset_path = assets_dir / "trashcan.png"
+                    if asset_path.exists():
+                        del_btn.setIcon(QIcon(str(asset_path)))
+                        del_btn.setIconSize(QSize(16, 16))
+                    else:
+                        icon = self._render_delete_icon(16)
+                        del_btn.setIcon(icon)
+                        del_btn.setIconSize(QSize(16, 16))
+                except Exception:
+                    del_btn.setText("✕")
+                del_btn.clicked.connect(lambda checked=False, cid=chat.get("id"): self._delete_chat(cid))
+                # Start hidden; reveal on hover of the entire chat row
+                try:
+                    del_btn.hide()
+                except Exception:
+                    pass
+                h.addWidget(del_btn)
+
+                # Show/hide delete button when hovering the row
+                try:
+                    orig_enter = getattr(item_wrap, "enterEvent", None)
+                    orig_leave = getattr(item_wrap, "leaveEvent", None)
+                    # Preserve original styles so we can restore them on leave
+                    orig_btn_style = btn.styleSheet() if hasattr(btn, 'styleSheet') else ''
+                    orig_wrap_style = item_wrap.styleSheet() if hasattr(item_wrap, 'styleSheet') else ''
+
+                    def _enter(e, dbtn=del_btn, ebtn=edit_btn, o=orig_enter, cbtn=btn, wrap=item_wrap, cbs=orig_btn_style, wbs=orig_wrap_style):
+                        try:
+                            # Show delete and edit icons
+                            try:
+                                dbtn.show()
+                            except Exception:
+                                pass
+                            try:
+                                ebtn.show()
+                            except Exception:
+                                pass
+                        except Exception:
+                            pass
+                        try:
+                            # Apply rounded background to the whole row and temporarily remove button border
+                            # Use a theme-aware hover color (black in dark mode, light gray in light mode)
+                            bg = "#222222" if getattr(self, 'dark_mode', False) else "#f3f4f6"
+                            wrap.setStyleSheet((wbs or "") + f"background-color: {bg}; border-radius: 12px;")
+                            cbtn.setStyleSheet((cbs or "") + "background: transparent; border: none;")
+                        except Exception:
+                            pass
+                        if callable(o):
+                            try:
+                                o(e)
+                            except Exception:
+                                pass
+
+                    def _leave(e, dbtn=del_btn, ebtn=edit_btn, o=orig_leave, cbtn=btn, wrap=item_wrap, cbs=orig_btn_style, wbs=orig_wrap_style):
+                        try:
+                            try:
+                                dbtn.hide()
+                            except Exception:
+                                pass
+                            try:
+                                ebtn.hide()
+                            except Exception:
+                                pass
+                        except Exception:
+                            pass
+                        try:
+                            # Restore original styles
+                            cbtn.setStyleSheet(cbs or "")
+                            wrap.setStyleSheet(wbs or "")
+                        except Exception:
+                            pass
+                        if callable(o):
+                            try:
+                                o(e)
+                            except Exception:
+                                pass
+
+                    item_wrap.enterEvent = _enter
+                    item_wrap.leaveEvent = _leave
+                except Exception:
+                    pass
+
+                layout.addWidget(item_wrap)
+        except Exception:
+            pass
+
+    def _delete_chat(self, chat_id: str) -> None:
+        """Remove a chat by id from in-memory store and refresh list."""
+        try:
+            self._chats = [c for c in self._chats if c.get("id") != chat_id]
+            if self._current_chat_id == chat_id:
+                self._current_chat_id = None
+                if hasattr(self, "script_edit"):
+                    self.script_edit.setPlainText(DEFAULT_SCRIPT.strip())
+                if hasattr(self, "log_output"):
+                    self.log_output.clear()
+            self._schedule_persist()
+            self._render_chat_list()
+        except Exception:
+            pass
+
+    def _reset_chat_filter(self) -> None:
+        """Reset the current chat filter and refresh the list."""
+        try:
+            if getattr(self, '_chat_filter', None):
+                self._chat_filter = ""
+                # Re-render the list and hide reset button
+                try:
+                    if getattr(self, 'drawer_reset_btn', None):
+                        self.drawer_reset_btn.hide()
+                except Exception:
+                    pass
+                self._render_chat_list()
+        except Exception:
+            pass
+
+    def _rename_chat(self, chat_id: str) -> None:
+        """Open a dialog to rename the chat and persist the change."""
+        try:
+            for c in self._chats:
+                if c.get("id") == chat_id:
+                    old = c.get("title", "")
+                    # Custom rename dialog matching the chat search UI
+                    dlg = QDialog(self)
+                    dlg.setWindowTitle("이름 변경")
+                    dlg.setModal(True)
+                    try:
+                        central = self.centralWidget()
+                        available_w = central.width() if central is not None else self.width()
+                        # Make rename dialog smaller than the page: use 65% of available width and clamp between 360 and 520px
+                        dlg_w = int(max(360, min(520, int(available_w * 0.65))))
+                    except Exception:
+                        dlg_w = 420
+                    dlg.setMinimumHeight(180)
+                    dlg.setFixedWidth(dlg_w)
+                    try:
+                        parent_tl = self.mapToGlobal(self.rect().topLeft())
+                        x = parent_tl.x() + max(8, (self.width() - dlg.width()) // 2)
+                        y = parent_tl.y() + 96
+                        dlg.move(x, y)
+                    except Exception:
+                        pass
+                    if self.dark_mode:
+                        dlg.setStyleSheet("QDialog { background: #000000; color: #e8e8e8; }")
+                    else:
+                        dlg.setStyleSheet("QDialog { background: #ffffff; color: #0f1724; }")
+                    v = QVBoxLayout(dlg)
+                    v.setContentsMargins(24, 20, 24, 18)
+                    v.setSpacing(12)
+                    heading = QLabel("새 제목을 입력하세요")
+                    heading.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                    heading.setStyleSheet("font-size:20px; font-weight:700;")
+                    v.addWidget(heading)
+                    box = QFrame()
+                    box_lyt = QVBoxLayout(box)
+                    box_lyt.setContentsMargins(12, 12, 12, 12)
+                    box_lyt.setSpacing(8)
+                    # Use single-line QLineEdit styled like the search input
+                    edit = QLineEdit()
+                    edit.setObjectName("rename-editor")
+                    edit.setText(old)
+                    edit.setMinimumHeight(48)
+                    edit.setMaximumHeight(64)
+                    edit.setPlaceholderText("새 제목을 입력하세요")
+                    # Make the input wider within the rename dialog (use a percent of dialog width)
+                    try:
+                        min_edit_w = int(dlg.width() * 0.75)
+                        max_edit_w = int(dlg.width() * 0.95)
+                        edit.setMinimumWidth(min_edit_w)
+                        edit.setMaximumWidth(max_edit_w)
+                        edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+                    except Exception:
+                        pass
+                    if self.dark_mode:
+                        edit.setStyleSheet("QLineEdit { background: #0f0f0f; border: 1px solid #2a2a2a; border-radius: 12px; color: #e8e8e8; padding: 12px; }")
+                    else:
+                        edit.setStyleSheet("QLineEdit { background: #f6f7f9; border: 1px solid #e5e7eb; border-radius: 12px; color: #0f1724; padding: 12px; }")
+                    box_lyt.addWidget(edit, 0, Qt.AlignmentFlag.AlignHCenter)
+                    # Buttons
+                    bottom = QWidget()
+                    b_lyt = QHBoxLayout(bottom)
+                    b_lyt.setContentsMargins(0, 0, 0, 0)
+                    b_lyt.setSpacing(8)
+                    b_lyt.addStretch()
+                    cancel_btn = QPushButton("취소")
+                    cancel_btn.clicked.connect(dlg.reject)
+                    try:
+                        cancel_btn.setStyleSheet("background: transparent; border: none; font-weight:700; font-size:15px; padding: 8px 16px;")
+                    except Exception:
+                        pass
+                    b_lyt.addWidget(cancel_btn, 0, Qt.AlignmentFlag.AlignRight)
+                    ok_btn = QPushButton("확인")
+                    ok_btn.setFixedSize(84, 40)
+                    try:
+                        ok_btn.setStyleSheet("background: #5377f6; color: white; border-radius: 10px; font-weight:700; font-size:15px;")
+                    except Exception:
+                        pass
+                    b_lyt.addWidget(ok_btn, 0, Qt.AlignmentFlag.AlignRight)
+                    box_lyt.addWidget(bottom)
+                    v.addWidget(box)
+                    def on_ok():
+                        try:
+                            txt = (edit.text() or "").strip()
+                            if txt and txt != old:
+                                c["title"] = txt
+                                c["updated_at"] = time.time()
+                                self._schedule_persist()
+                                self._render_chat_list()
+                            dlg.accept()
+                        except Exception:
+                            dlg.reject()
+                    ok_btn.clicked.connect(on_ok)
+                    # Allow Enter to confirm
+                    edit.returnPressed.connect(on_ok)
+                    dlg.exec()
+                    return
+        except Exception:
+            pass
+    def _close_drawer(self) -> None:
+        """Close the drawer panel (explicit slot for close button)."""
+        try:
+            # Use animated close so the X button triggers the same animation as the toggle
+            self._set_drawer_open(False, animate=True)
+        except Exception:
+            # Defensive: ensure no exception bubbles up to UI event handler
+            try:
+                # Fallback: immediately hide and move off-screen
+                if hasattr(self, "drawer_panel"):
+                    w = self.drawer_panel.width()
+                    self.drawer_panel.move(QPoint(-w, 0))
+                    self.drawer_panel.hide()
+                if hasattr(self, "drawer_overlay"):
+                    self.drawer_overlay.hide()
+            except Exception:
+                pass
+
+    def _hide_drawer_popup(self) -> None:
+        """Hide and delete any in-drawer popup (profile/backup)."""
+        try:
+            if getattr(self, "_drawer_popup", None):
+                try:
+                    self._drawer_popup.hide()
+                except Exception:
+                    pass
+                try:
+                    self._drawer_popup.deleteLater()
+                except Exception:
+                    pass
+                self._drawer_popup = None
+        except Exception:
+            pass
+
+    def keyPressEvent(self, event) -> None:
+        """Close drawer/popups on ESC key for convenience."""
+        try:
+            if event.key() == Qt.Key.Key_Escape and getattr(self, "_drawer_open", False):
+                self._set_drawer_open(False, animate=True)
+                return
+        except Exception:
+            pass
+        try:
+            super().keyPressEvent(event)
+        except Exception:
+            pass
+
+    def _activate_chat(self, chat_id: str) -> None:
+        """Activate the chat with the given id, loading its content into the UI."""
+        try:
+            for chat in self._chats:
+                if chat.get("id") == chat_id:
+                    self._current_chat_id = chat_id
+                    if hasattr(self, "script_edit"):
+                        self.script_edit.setPlainText(chat.get("script", ""))
+                    if hasattr(self, "log_output"):
+                        self.log_output.setPlainText(chat.get("log", ""))
+                    self._render_chat_list()
+                    self._set_drawer_open(False)
+                    return
+        except Exception:
+            pass
 
     def _apply_button_icon(
         self,
@@ -327,6 +782,16 @@ class MainWindow(QMainWindow):
     ) -> None:
         """Set a theme-aware icon on a button."""
         icon_path = self._get_icon_path(icon_key, use_theme=True)
+        # Special-case: prefer specific light-themed assets for some icons regardless of current theme
+        if not icon_path and icon_key in ("light", "settings"):
+            try:
+                # Try resolving with dark_mode=False so 'light-light.svg' or 'settings-light.svg' are found
+                alt = design.get_icon_path(icon_key, False, use_theme=True)
+                if alt:
+                    icon_path = alt
+            except Exception:
+                pass
+
         button.setIcon(QIcon())
         if icon_path:
             button.setIcon(QIcon(str(icon_path)))
@@ -338,41 +803,133 @@ class MainWindow(QMainWindow):
                 button.setText(fallback_text)
 
     def _get_icon_path(self, icon_key: str, use_theme: bool = True) -> Path | None:
-        """Return themed icon path if available."""
-        assets_dir = Path(__file__).resolve().parents[1] / "public" / "img"
-        theme_suffix = "dark" if self.dark_mode else "light"
-        
-        if use_theme:
-            candidates = [
-                f"{icon_key}-{theme_suffix}.svg",
-                f"{icon_key}_{theme_suffix}.svg",
-                f"{icon_key}.svg",
-                f"{icon_key}-{theme_suffix}.png",
-                f"{icon_key}_{theme_suffix}.png",
-                f"{icon_key}.png",
-            ]
-            # Prefer explicit black variant in light mode for better contrast
-            if not self.dark_mode:
-                candidates = [
-                    f"{icon_key}_black.png",
-                    f"{icon_key}-black.png",
-                    *candidates,
-                ]
-        else:
-            candidates = [
-                f"{icon_key}.png",
-                f"{icon_key}.svg",
-            ]
-        
-        for filename in candidates:
-            icon_path = assets_dir / filename
-            if icon_path.exists():
-                return icon_path
-        return None
+        """Return themed icon path if available (delegates to gui.design)."""
+        return design.get_icon_path(icon_key, getattr(self, "dark_mode", False), use_theme=use_theme)
 
     def _get_icon_path_str(self, icon_key: str) -> str | None:
         path = self._get_icon_path(icon_key)
         return str(path) if path else None
+
+    def _make_pixmap_background_transparent(self, pix: QPixmap, tolerance: int = 8) -> QPixmap | None:
+        """Make a uniform background color transparent by sampling a corner pixel and making nearby colors transparent."""
+        try:
+            img = pix.toImage().convertToFormat(QImage.Format_ARGB32)
+            w = img.width()
+            h = img.height()
+            sample = None
+            for sx, sy in ((0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)):
+                c = QColor(img.pixel(sx, sy))
+                if c.alpha() > 16:
+                    sample = c
+                    break
+            if sample is None:
+                return pix
+            sr, sg, sb = sample.red(), sample.green(), sample.blue()
+            for y in range(h):
+                for x in range(w):
+                    c = QColor(img.pixel(x, y))
+                    dr = abs(c.red() - sr)
+                    dg = abs(c.green() - sg)
+                    db = abs(c.blue() - sb)
+                    if dr <= tolerance and dg <= tolerance and db <= tolerance:
+                        img.setPixelColor(x, y, QColor(0, 0, 0, 0))
+            return QPixmap.fromImage(img)
+        except Exception:
+            return None
+
+    def _set_drawer_toggle_icon(self, size_px: int = 28) -> None:
+        """Set the drawer toggle button icon, using a dark variant when in dark mode and stripping any uniform background color."""
+        try:
+            assets_dir = Path(__file__).resolve().parents[1] / "public" / "img"
+            if getattr(self, 'drawer_toggle_btn', None) is None:
+                return
+            # Prefer a theme-specific openbtn asset: use openbtn-dark.png in dark mode, otherwise openbtn.png
+            if getattr(self, 'dark_mode', False):
+                candidate = assets_dir / "openbtn-dark.png"
+                if not candidate.exists():
+                    alt = assets_dir / "openbtn.png"
+                    candidate = alt if alt.exists() else None
+            else:
+                candidate = assets_dir / "openbtn.png"
+                if not candidate.exists():
+                    alt = assets_dir / "openbtn-dark.png"
+                    candidate = alt if alt.exists() else None
+            if candidate is not None:
+                # First try setting the file icon directly (no processing) using a slightly smaller size
+                try:
+                    direct_icon = QIcon(str(candidate))
+                    direct_size = max(12, size_px - 8)
+                    self.drawer_toggle_btn.setIcon(direct_icon)
+                    self.drawer_toggle_btn.setIconSize(QSize(direct_size, direct_size))
+                    # Quick transparency test on the direct pixmap; if too transparent, fall back to processing
+                    direct_pix = direct_icon.pixmap(direct_size, direct_size)
+                    def _almost_transparent(pix: QPixmap, thresh: float = 0.7) -> bool:
+                        try:
+                            img = pix.toImage().convertToFormat(QImage.Format_ARGB32)
+                            w = img.width(); h = img.height()
+                            total = w * h
+                            if total == 0:
+                                return True
+                            transparent = 0
+                            for y in range(h):
+                                for x in range(w):
+                                    if QColor(img.pixel(x, y)).alpha() < 16:
+                                        transparent += 1
+                            return (transparent / total) >= thresh
+                        except Exception:
+                            return False
+                    if not _almost_transparent(direct_pix, thresh=0.85):
+                        # direct icon looks fine — keep it
+                        return
+                except Exception:
+                    # fall through to processing
+                    pass
+
+                # Otherwise, attempt to strip uniform backgrounds (use higher tolerance) and aggressive border removal
+                pix = QPixmap(str(candidate))
+                processed = self._make_pixmap_background_transparent(pix, tolerance=40) or pix
+                try:
+                    corner_alpha = processed.toImage().pixelColor(0, 0).alpha()
+                except Exception:
+                    corner_alpha = 255
+                if corner_alpha > 16:
+                    try:
+                        img = pix.toImage().convertToFormat(QImage.Format_ARGB32)
+                        w = img.width()
+                        h = img.height()
+                        sr = sg = sb = count = 0
+                        for x in range(w):
+                            for y in (0, h - 1):
+                                c = QColor(img.pixel(x, y))
+                                if c.alpha() > 16:
+                                    sr += c.red(); sg += c.green(); sb += c.blue(); count += 1
+                        for y in range(h):
+                            for x in (0, w - 1):
+                                c = QColor(img.pixel(x, y))
+                                if c.alpha() > 16:
+                                    sr += c.red(); sg += c.green(); sb += c.blue(); count += 1
+                        if count > 0:
+                            sr //= count; sg //= count; sb //= count
+                            tol = 80
+                            for yy in range(h):
+                                for xx in range(w):
+                                    c = QColor(img.pixel(xx, yy))
+                                    if abs(c.red() - sr) <= tol and abs(c.green() - sg) <= tol and abs(c.blue() - sb) <= tol:
+                                        img.setPixelColor(xx, yy, QColor(0, 0, 0, 0))
+                            processed = QPixmap.fromImage(img)
+                    except Exception:
+                        pass
+
+                processed = processed.scaled(size_px, size_px, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                self.drawer_toggle_btn.setIcon(QIcon(processed))
+                self.drawer_toggle_btn.setIconSize(QSize(size_px, size_px))
+            else:
+                self._set_material_symbol(self.drawer_toggle_btn, "menu", fallback="≡", px=size_px - 6)
+        except Exception:
+            try:
+                self._set_material_symbol(self.drawer_toggle_btn, "menu", fallback="≡", px=20)
+            except Exception:
+                pass
 
     def _build_ui(self) -> None:
         central = QWidget(self)
@@ -388,6 +945,12 @@ class MainWindow(QMainWindow):
         
         # Header area (title, help buttons, templates)
         self.header_area = QWidget()
+        # Allow targeted styling and transparency for the top navbar
+        self.header_area.setObjectName("header-area")
+        try:
+            self.header_area.setStyleSheet("background-color: transparent;")
+        except Exception:
+            pass
         header_layout = QVBoxLayout(self.header_area)
         header_layout.setContentsMargins(40, 40, 40, 0)
         header_layout.setSpacing(20)
@@ -417,8 +980,8 @@ class MainWindow(QMainWindow):
         input_area = QWidget()
         input_area.setObjectName("input-container")
         input_layout = QVBoxLayout(input_area)
-        input_layout.setContentsMargins(40, 0, 40, 40)
-        input_layout.setSpacing(12)
+        input_layout.setContentsMargins(24, 0, 24, 24)
+        input_layout.setSpacing(16)
         
         # Image preview area (initially hidden)
         self.image_preview_container = QWidget()
@@ -434,16 +997,16 @@ class MainWindow(QMainWindow):
         script_container = QWidget()
         script_container.setObjectName("script-input-container")
         script_layout = QVBoxLayout(script_container)
-        script_layout.setContentsMargins(14, 14, 14, 14)
-        script_layout.setSpacing(12)
+        script_layout.setContentsMargins(20, 20, 20, 20)
+        script_layout.setSpacing(16)
         
         # Script editor
         self.script_edit = QTextEdit()
         self.script_edit.setObjectName("script-editor")
         self.script_edit.setPlaceholderText("코드를 작성하거나 붙여넣으세요")
         self.script_edit.setPlainText(DEFAULT_SCRIPT.strip())
-        self.script_edit.setMaximumHeight(180)
-        self.script_edit.setMinimumHeight(140)
+        self.script_edit.setMaximumHeight(320)
+        self.script_edit.setMinimumHeight(200)
         # Custom context menu in Korean
         self.script_edit.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.script_edit.customContextMenuRequested.connect(self._show_editor_context_menu)
@@ -461,7 +1024,7 @@ class MainWindow(QMainWindow):
         self.add_file_btn.setMaximumWidth(40)
         self.add_file_btn.setMinimumWidth(40)
         self.add_file_btn.setMinimumHeight(48)
-        self.add_file_btn.setFont(QFont("Arial", 24, QFont.Weight.Bold))
+        self.add_file_btn.setFont(QFont("Pretendard", 24, QFont.Weight.Bold))
         self.add_file_btn.setToolTip("파일 또는 이미지 추가")
         self.add_file_btn.clicked.connect(self._handle_add_file)
         self.add_file_btn.setText("")
@@ -472,9 +1035,57 @@ class MainWindow(QMainWindow):
                 padding: 4px 8px;
             }
         """)
-        self._apply_button_icon(self.add_file_btn, "plus", "+", QSize(32, 32))
-        bottom_row.addWidget(self.add_file_btn)
-        
+        # Make upload button larger and circular (transparent background)
+        self.add_file_btn.setFixedSize(56, 56)
+        self.add_file_btn.setStyleSheet("QPushButton#upload-button { background-color: transparent; border: none; border-radius: 28px; font-size: 28px; }")
+        # Use the plus glyph/icon for the upload button (keeps consistent with design)
+        try:
+            self._apply_button_icon(self.add_file_btn, "plus", "+", QSize(36, 36))
+        except Exception:
+            self._apply_button_icon(self.add_file_btn, "plus", "+", QSize(36, 36))
+        # Upload button will be added to the right of the microphone button further down to match design
+
+        # Small plus button to the left of the HWP pill (theme-aware asset: plus.png / plus-dark.png)
+        self.hwp_add_btn = QPushButton("")
+        self.hwp_add_btn.setObjectName("hwp-add-button")
+        self.hwp_add_btn.setToolTip("파일 또는 이미지 추가")
+        self.hwp_add_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.hwp_add_btn.setFixedSize(44, 44)
+        self.hwp_add_btn.setStyleSheet("QPushButton#hwp-add-button { background-color: transparent; border: none; border-radius: 8px; }")
+        try:
+            assets_dir = Path(__file__).resolve().parents[1] / "public" / "img"
+            candidate = assets_dir / ("plus-dark.png" if getattr(self, 'dark_mode', False) else "plus.png")
+            if not candidate.exists():
+                alt = assets_dir / ("plus.png" if getattr(self, 'dark_mode', False) else "plus-dark.png")
+                if alt.exists():
+                    candidate = alt
+                else:
+                    candidate = None
+            if candidate is not None:
+                self.hwp_add_btn.setIcon(QIcon(str(candidate)))
+                self.hwp_add_btn.setIconSize(QSize(24, 24))
+            else:
+                self._apply_button_icon(self.hwp_add_btn, "plus", "+", QSize(24, 24))
+        except Exception:
+            self._apply_button_icon(self.hwp_add_btn, "plus", "+", QSize(24, 24))
+        self.hwp_add_btn.clicked.connect(self._handle_add_file)
+        bottom_row.addWidget(self.hwp_add_btn)
+
+        # HWP filename display (pill)
+        self.hwp_filename_label = QLabel("한글 문서")
+        self.hwp_filename_label.setObjectName("hwp-filename")
+        self.hwp_filename_label.setStyleSheet("""
+            color: #0f1724;
+            font-size: 15px;
+            font-weight: 800;
+            padding: 8px 18px;
+            background-color: #ffffff;
+            border: 1px solid #e5e7eb;
+            border-radius: 20px;
+        """)
+        bottom_row.addWidget(self.hwp_filename_label)
+        bottom_row.addSpacing(8)
+
         # AI selector button
         self.ai_selector_btn = QPushButton("[AI]")
         self.ai_selector_btn.setObjectName("upload-button")
@@ -486,7 +1097,7 @@ class MainWindow(QMainWindow):
         self._apply_button_icon(self.ai_selector_btn, "ai", "[AI]", QSize(28, 28))
         bottom_row.addWidget(self.ai_selector_btn)
 
-        # Model label to the right of the flash/AI icon
+        # Model label to the right of the flash/AI icon (hidden in simplified layout)
         self.model_label = QLabel("GPT-5-nano")
         self.model_label.setObjectName("model-label")
         self.model_label.setStyleSheet(
@@ -496,22 +1107,9 @@ class MainWindow(QMainWindow):
         bottom_row.addWidget(self.model_label)
         
         bottom_row.addStretch()
-        
-        # HWP filename display
-        self.hwp_filename_label = QLabel("한글 문서")
-        self.hwp_filename_label.setObjectName("hwp-filename")
-        self.hwp_filename_label.setStyleSheet("""
-            color: #666;
-            font-size: 13px;
-            font-weight: 500;
-            padding: 4px 12px;
-            background-color: rgba(128, 128, 128, 0.1);
-            border-radius: 6px;
-            margin-right: 12px;
-        """)
-        bottom_row.addWidget(self.hwp_filename_label)
-        
-        # Microphone button
+        # HWP pill already added near the upload button
+
+        # Microphone button (hidden in simplified layout)
         self.mic_btn = QPushButton("[MIC]")
         self.mic_btn.setObjectName("upload-button")
         self.mic_btn.setMaximumWidth(44)
@@ -521,29 +1119,99 @@ class MainWindow(QMainWindow):
         self.mic_btn.clicked.connect(self._handle_voice_input)
         self._apply_button_icon(self.mic_btn, "mic", "[MIC]", QSize(28, 28))
         bottom_row.addWidget(self.mic_btn)
+        # Hide non-essential composer controls per simplified layout
+        try:
+            self.add_file_btn.hide()
+            self.ai_selector_btn.hide()
+            self.model_label.hide()
+            self.hwp_filename_label.hide()
+            self.mic_btn.hide()
+        except Exception:
+            pass
         
-        # Right side: Run button (play icon)
-        self.run_button = QPushButton("▶")
-        self.run_button.setObjectName("primary-action")
-        self.run_button.setMaximumWidth(60)
-        self.run_button.setMinimumWidth(60)
-        self.run_button.setMinimumHeight(44)
-        self.run_button.setFont(QFont("Arial", 22, QFont.Weight.Bold))
+        # Right side: Send button (circular)
+        self.run_button = QPushButton("")
+        self.run_button.setObjectName("composer-send")
+        self.run_button.setFixedSize(80, 80)
+        self.run_button.setFont(QFont("Pretendard", 22, QFont.Weight.Bold))
         self.run_button.setToolTip("스크립트를 한글에서 실행합니다 (Ctrl+Enter)")
         self.run_button.clicked.connect(self._handle_run_clicked)
+        # Circular send style (will be overridden by theme but safe default)
+        btn_bg = "#f3f4f6" if not self.dark_mode else "#1f2937"
+        btn_color = "#000000" if not self.dark_mode else "#ffffff"
+        self.run_button.setStyleSheet(f"QPushButton#composer-send {{ background: {btn_bg}; border-radius: 40px; border: none; font-weight: 700; color: {btn_color}; }}")
         bottom_row.addWidget(self.run_button)
+        # Set upload icon for the send button (use dark variant in dark mode)
+        try:
+            self._set_send_icon(size_px=40)
+        except Exception:
+            pass
         
         script_layout.addLayout(bottom_row)
         
         input_layout.addWidget(script_container)
 
         # Add areas to main column with proper spacing
-        main_column.addWidget(self.header_area, 0)      # Header with fixed height
-        main_column.addWidget(self.output_area, 2)      # Output takes 2/3 space
-        main_column.addWidget(input_area, 1)            # Input takes 1/3 space
+        # NOTE: keep the main screen minimal — don't add the header or output area
+        # Hero area (centered prompt + pill buttons)
+        hero_area = QWidget()
+        hero_layout = QVBoxLayout(hero_area)
+        hero_layout.setContentsMargins(40, 0, 40, 0)
+        hero_layout.setSpacing(0)
+        hero_layout.addStretch(1)
+        hero_prompt = QLabel("무엇이든 입력하세요")
+        hero_prompt.setObjectName("hero-prompt")
+        hero_prompt.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        cp_color = "#000000" if not self.dark_mode else "#ffffff"
+        hero_prompt.setStyleSheet(f"font-size:48px; font-weight:800; color:{cp_color};")
+        self.center_prompt = hero_prompt
+        hero_layout.addWidget(self.center_prompt, alignment=Qt.AlignmentFlag.AlignCenter)
+        hero_layout.addSpacing(18)
+        hero_layout.addWidget(self._build_help_buttons(), alignment=Qt.AlignmentFlag.AlignHCenter)
+        hero_layout.addStretch(1)
+        main_column.addWidget(hero_area, 1)
+
+        # Top-left hamburger (drawer toggle)
+        top_bar = QWidget()
+        top_bar.setObjectName("top-bar-hamburger")
+        top_bar_layout = QHBoxLayout(top_bar)
+        top_bar_layout.setContentsMargins(12, 12, 12, 0)
+        top_bar_layout.setSpacing(0)
+        self.drawer_toggle_btn = QToolButton()
+        self.drawer_toggle_btn.setObjectName("drawer-toggle")
+        # Keep a visible rounded background for the hamburger (not auto-raise)
+        self.drawer_toggle_btn.setAutoRaise(False)
+        self.drawer_toggle_btn.setToolTip("메뉴 열기")
+        self.drawer_toggle_btn.setFixedSize(36, 36)
+        self.drawer_toggle_btn.clicked.connect(self._toggle_drawer)
+        # Set drawer toggle icon (handles dark-mode variant, background removal, and sizing)
+        try:
+            self._set_drawer_toggle_icon(size_px=36)
+        except Exception:
+            try:
+                self._set_material_symbol(self.drawer_toggle_btn, "menu", fallback="≡", px=22)
+            except Exception:
+                self.drawer_toggle_btn.setText("≡")
+        top_bar_layout.addWidget(self.drawer_toggle_btn, alignment=Qt.AlignmentFlag.AlignLeft)
+        top_bar_layout.addStretch()
+        main_column.insertWidget(0, top_bar, 0)
+
+        # Input pinned to bottom; height managed by _update_composer_height()
+        main_column.addWidget(input_area, 0)
+
+        # Ensure the central/main area object name is set; theme is applied in _apply_styles
+        central.setObjectName("central")
+        try:
+            # Do not set inline background here; use _apply_styles() to control light/dark backgrounds
+            main_area.setStyleSheet("")
+        except Exception:
+            pass
+
+        # Build drawer overlay and panel (initially hidden)
+        self._build_drawer(central)
+        self._update_drawer_geometry()
 
         layout.addWidget(main_area, 1)
-        layout.addWidget(self._build_sidebar(), 0)
         self.setCentralWidget(central)
 
     def _build_header(self) -> QWidget:
@@ -567,7 +1235,7 @@ class MainWindow(QMainWindow):
         title_layout.addWidget(self.logo_label)
         
         # Title text
-        title = QLabel("FormuLite")
+        title = QLabel("Nova AI")
         title.setObjectName("app-title")
         title_layout.addWidget(title)
         
@@ -581,54 +1249,41 @@ class MainWindow(QMainWindow):
         return frame
 
     def _build_help_buttons(self) -> QWidget:
-        """Build horizontally aligned help buttons."""
+        """Build compact help buttons for the top-left area."""
         container = QWidget()
         layout = QHBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
-        
-        layout.addStretch()
+        layout.setSpacing(10)
         
         self.howto_button = QPushButton("도움말")
         self.howto_button.setObjectName("help-button")
-        self.howto_button.setMaximumWidth(140)
-        self.howto_button.setFixedHeight(38)
+        self.howto_button.setFixedHeight(34)
+        self.howto_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.howto_button.setToolTip("프로그램 사용 방법과 함수 가이드를 제공합니다")
         self.howto_button.clicked.connect(self._show_howto)
         self.howto_button.setText("도움말")
-        self._apply_button_icon(self.howto_button, "help", "[?]", QSize(20, 20), preserve_text=True)
+        self._apply_button_icon(self.howto_button, "help", "[?]", QSize(18, 18), preserve_text=True)
         layout.addWidget(self.howto_button)
         
         self.latex_button = QPushButton("</> LaTeX")
         self.latex_button.setObjectName("help-button")
-        self.latex_button.setMaximumWidth(140)
-        self.latex_button.setFixedHeight(38)
+        self.latex_button.setFixedHeight(34)
+        self.latex_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.latex_button.setToolTip("LaTeX 수식 문법 가이드를 제공합니다")
         self.latex_button.clicked.connect(self._show_latex_helper)
         layout.addWidget(self.latex_button)
         
         self.ai_generate_button = QPushButton("AI 생성")
         self.ai_generate_button.setObjectName("help-button")
-        self.ai_generate_button.setMaximumWidth(140)
-        self.ai_generate_button.setFixedHeight(38)
+        self.ai_generate_button.setFixedHeight(34)
+        self.ai_generate_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.ai_generate_button.setToolTip("AI가 스크립트를 생성합니다")
         self.ai_generate_button.clicked.connect(self._show_ai_generate_dialog)
         self.ai_generate_button.setText("AI 생성")
-        self._apply_button_icon(self.ai_generate_button, "generate", "[+]", QSize(20, 20), preserve_text=True)
+        self._apply_button_icon(self.ai_generate_button, "generate", "[+]", QSize(18, 18), preserve_text=True)
         layout.addWidget(self.ai_generate_button)
-        
-        self.ai_optimize_button = QPushButton("AI 최적화")
-        self.ai_optimize_button.setObjectName("help-button")
-        self.ai_optimize_button.setMaximumWidth(140)
-        self.ai_optimize_button.setFixedHeight(38)
-        self.ai_optimize_button.setToolTip("AI가 스크립트를 최적화합니다")
-        self.ai_optimize_button.clicked.connect(self._show_ai_optimize_dialog)
-        self.ai_optimize_button.setText("AI 최적화")
-        self._apply_button_icon(self.ai_optimize_button, "optimize", "[*]", QSize(20, 20), preserve_text=True)
-        layout.addWidget(self.ai_optimize_button)
-        
-        layout.addStretch()
-        # Apply distinct styling to help buttons based on theme
+
+        # Apply distinct styling to help buttons after loading theme
         self._apply_help_button_style()
         return container
 
@@ -710,111 +1365,798 @@ class MainWindow(QMainWindow):
         timer.start(600)
 
     def _build_sidebar(self) -> QWidget:
+        """Build the actual sidebar content (used inside the hidden drawer panel)."""
         frame = QFrame()
-        frame.setObjectName("sidebar")
+        frame.setObjectName("sidebar-content")
         lyt = QVBoxLayout(frame)
-        lyt.setContentsMargins(12, 20, 12, 20)
-        lyt.setSpacing(12)
+        # Use compact margins so the sidebar content occupies top and bottom tightly
+        lyt.setContentsMargins(6, 6, 6, 6)
+        # Slight spacing for readable grouping
+        lyt.setSpacing(8)
 
-        # Save script button
-        self.save_btn = QToolButton()
-        self.save_btn.setObjectName("pin-button")
-        self.save_btn.setToolTip("스크립트 저장")
-        self.save_btn.setAutoRaise(True)
-        self.save_btn.setText("[S]")
-        self._apply_button_icon(self.save_btn, "save", "[S]", QSize(32, 32))
-        self.save_btn.clicked.connect(self._save_script)
+        # Header: title + close button
+        header = QWidget()
+        header.setObjectName("drawer-header")
+        hl = QHBoxLayout(header)
+        # Match the left/top inset of drawer action buttons so the title lines up vertically/ horizontally
+        hl.setContentsMargins(12, 12, 12, 0)
+        hl.setSpacing(8)
+        title = QLabel("Nova AI")
+        title.setObjectName("drawer-title")
+        title.setStyleSheet("font-weight:800; font-size:20px;")
+        hl.addWidget(title, alignment=Qt.AlignmentFlag.AlignLeft)
+        hl.addStretch()
+        close_btn = QToolButton()
+        close_btn.setObjectName("drawer-close-btn")
+        close_btn.setAutoRaise(False)
+        close_btn.setFixedSize(36, 36)
+        close_btn.setText("✕")
+        close_btn.setToolTip("닫기")
+        close_btn.clicked.connect(self._close_drawer)
+        # Keep close button at the far right
+        hl.addWidget(close_btn, alignment=Qt.AlignmentFlag.AlignRight)
+        lyt.addWidget(header)
 
-        # Load script button
-        self.load_btn = QToolButton()
-        self.load_btn.setObjectName("pin-button")
-        self.load_btn.setToolTip("스크립트 불러오기")
-        self.load_btn.setAutoRaise(True)
-        self.load_btn.setText("[L]")
-        self._apply_button_icon(self.load_btn, "load", "[L]", QSize(32, 32))
-        self.load_btn.clicked.connect(self._load_script)
+        # Primary actions (New Chat / Search)
+        self.drawer_new_chat_btn = QPushButton("새 채팅")
+        self.drawer_new_chat_btn.setObjectName("drawer-action")
+        self.drawer_new_chat_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.drawer_new_chat_btn.setMinimumHeight(48)
+        self.drawer_new_chat_btn.clicked.connect(self._new_chat)
+        # Prefer asset write.png for the icon
+        try:
+            assets_dir = Path(__file__).resolve().parents[1] / "public" / "img"
+            write_icon = assets_dir / "write.png"
+            if write_icon.exists():
+                self.drawer_new_chat_btn.setIcon(QIcon(str(write_icon)))
+                self.drawer_new_chat_btn.setIconSize(QSize(18, 18))
+            else:
+                self._set_drawer_item_icon(self.drawer_new_chat_btn, "edit_square", fallback="✏", px=18)
+        except Exception:
+            self._set_drawer_item_icon(self.drawer_new_chat_btn, "edit_square", fallback="✏", px=18)
+        # Group primary actions into a compact container so the spacing between them is narrower
+        actions_wrap = QWidget()
+        aw_lyt = QVBoxLayout(actions_wrap)
+        aw_lyt.setContentsMargins(0, 0, 0, 0)
+        # Narrower spacing between the two primary buttons only
+        aw_lyt.setSpacing(0)
+        try:
+            # Inline styling for tight vertical rhythm without touching global QSS
+            # Reduce bottom margin to bring the buttons closer
+            self.drawer_new_chat_btn.setStyleSheet("padding:8px 10px; margin-top:2px; margin-bottom:0px;")
+        except Exception:
+            pass
+        aw_lyt.addWidget(self.drawer_new_chat_btn)
 
-        # Backup button
-        self.backup_icon_btn = QToolButton()
-        self.backup_icon_btn.setObjectName("pin-button")
-        self.backup_icon_btn.setToolTip("백업 및 복원")
-        self.backup_icon_btn.setAutoRaise(True)
-        self.backup_icon_btn.setText("[B]")
-        self._apply_button_icon_themed(self.backup_icon_btn, "backup_icon", "[B]", QSize(32, 32))
-        self.backup_icon_btn.clicked.connect(self._show_backup_menu)
+        # Remove spacer and directly style the search button to sit closer to the new-chat button
+        self.drawer_search_btn = QPushButton("채팅 검색")
+        self.drawer_search_btn.setObjectName("drawer-action")
+        self.drawer_search_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        # Reduce height and padding so the button is visually higher and closer to the '새 채팅' button
+        self.drawer_search_btn.setMinimumHeight(40)
+        self.drawer_search_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        # Use consistent padding (avoid negative padding which can render differently across themes)
+        # Tighten spacing: pull the search button up using a small negative top margin so it sits closer to New Chat
+        try:
+            # Negative top margin is intentionally used here (inline only) to override theme padding without changing button heights
+            self.drawer_search_btn.setStyleSheet("margin-top:-8px; margin-bottom: 4px; padding:6px 10px; font-size:15px; font-weight:800;")
+        except Exception:
+            pass
+        self.drawer_search_btn.clicked.connect(self._open_chat_search)
+        # Prefer asset search.png for the icon
+        try:
+            search_icon = assets_dir / "search.png"
+            if search_icon.exists():
+                self.drawer_search_btn.setIcon(QIcon(str(search_icon)))
+                self.drawer_search_btn.setIconSize(QSize(18, 18))
+            else:
+                self._set_drawer_item_icon(self.drawer_search_btn, "search", fallback="🔎", px=18)
+        except Exception:
+            self._set_drawer_item_icon(self.drawer_search_btn, "search", fallback="🔎", px=18)
+        aw_lyt.addWidget(self.drawer_search_btn)
+        lyt.addWidget(actions_wrap)
 
-        # Theme button
-        self.theme_btn = QToolButton()
-        self.theme_btn.setObjectName("pin-button")
-        self.theme_btn.setCheckable(True)
-        self.theme_btn.setToolTip("다크 모드")
-        self.theme_btn.setAutoRaise(True)
-        self.theme_btn.setChecked(self.dark_mode)
-        self._set_theme_glyph(self.dark_mode)
-        self.theme_btn.toggled.connect(self._toggle_theme)
+        # Section title
+        # Section title with reset-search button on the right
+        section_wrap = QWidget()
+        sw_lyt = QHBoxLayout(section_wrap)
+        sw_lyt.setContentsMargins(0, 0, 0, 0)
+        sw_lyt.setSpacing(8)
+        section = QLabel("내 채팅")
+        section.setObjectName("drawer-section-title")
+        sw_lyt.addWidget(section, 0, Qt.AlignmentFlag.AlignLeft)
+        # Reset search button: clears the current chat filter
+        reset_btn = QToolButton()
+        reset_btn.setObjectName('drawer-section-reset')
+        reset_btn.setToolTip('검색 초기화')
+        # Use auto-raise for a flat look and remove any border via inline style
+        reset_btn.setAutoRaise(True)
+        # Increase size for easier tapping and visual balance
+        reset_btn.setFixedSize(36, 36)
+        reset_btn.setText('✕')
+        # Remove the gray border and use a neutral muted color
+        try:
+            reset_btn.setStyleSheet('background: transparent; border: none; font-size: 16px; color: #6b7280;')
+        except Exception:
+            pass
+        reset_btn.clicked.connect(self._reset_chat_filter)
+        # hidden by default until a filter is active
+        reset_btn.hide()
+        sw_lyt.addWidget(reset_btn, 0, Qt.AlignmentFlag.AlignRight)
+        lyt.addWidget(section_wrap)
+        # expose for update when filter changes
+        self.drawer_reset_btn = reset_btn
 
-        # Settings button
-        self.settings_btn = QToolButton()
-        self.settings_btn.setObjectName("pin-button")
-        self.settings_btn.setToolTip("설정")
-        self.settings_btn.setAutoRaise(True)
-        self._set_settings_glyph()
-        self.settings_btn.clicked.connect(self._show_settings)
+        # Scrollable chat list
+        scroll = QScrollArea()
+        scroll.setObjectName("drawer-chat-scroll")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        list_host = QWidget()
+        list_host.setObjectName("drawer-chat-list")
+        v = QVBoxLayout(list_host)
+        v.setContentsMargins(0, 0, 0, 0)
+        # Add a small vertical gap between chat rows so their gray hover backgrounds don't touch
+        v.setSpacing(8)
+        # Anchor items to the top so a short list doesn't vertically distribute items
+        try:
+            v.setAlignment(Qt.AlignmentFlag.AlignTop)
+        except Exception:
+            pass
+        self.drawer_chat_list_layout = v
+        scroll.setWidget(list_host)
+        lyt.addWidget(scroll, 1)
 
-        lyt.addWidget(self.save_btn, alignment=Qt.AlignmentFlag.AlignTop)
-        lyt.addWidget(self.load_btn, alignment=Qt.AlignmentFlag.AlignTop)
-        lyt.addWidget(self.backup_icon_btn, alignment=Qt.AlignmentFlag.AlignTop)
-        lyt.addWidget(self.theme_btn, alignment=Qt.AlignmentFlag.AlignTop)
+        # Divider
+        divider = QFrame()
+        divider.setObjectName("drawer-divider")
+        divider.setFrameShape(QFrame.Shape.HLine)
+        divider.setFrameShadow(QFrame.Shadow.Plain)
+        # In dark mode the default HLine can look like a harsh black line; hide it and rely on the profile-wrap border instead
+        try:
+            if getattr(self, 'dark_mode', False):
+                divider.hide()
+        except Exception:
+            pass
+        lyt.addWidget(divider)
+        # Small gap between divider and profile area for breathing room
+        lyt.addSpacing(8)
+
+        # Profile area (opens profile menu with Save/Load/Backup/Theme/Settings)
+        profile_wrap = QWidget()
+        profile_wrap.setObjectName("drawer-profile-wrap")
+        pwl = QHBoxLayout(profile_wrap)
+        # Increase vertical padding so the profile area becomes taller and feels roomier
+        pwl.setContentsMargins(8, 10, 8, 10)
+        pwl.setSpacing(10)
+
+        avatar = QLabel()
+        avatar.setObjectName("drawer-avatar")
+        # Try to load a profile photo if present (user-provided only)
+        try:
+            assets_dir = Path(__file__).resolve().parents[1] / "public" / "img"
+            # Prefer explicit user-provided path only. Do NOT fallback to bundled images — show an initial-letter avatar when no user image is set.
+            candidate = getattr(self, "profile_avatar_path", None)
+            if candidate:
+                candidate = Path(candidate)
+            if candidate and Path(candidate).exists():
+                # Load and make a rounded pixmap
+                def _rounded_pixmap(pth, size=48):
+                    pix = QPixmap(str(pth))
+                    if pix.isNull():
+                        return None
+                    pix = pix.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
+                    out = QPixmap(size, size)
+                    out.fill(Qt.GlobalColor.transparent)
+                    painter = QPainter(out)
+                    try:
+                        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+                        pathp = QPainterPath()
+                        pathp.addEllipse(0, 0, size, size)
+                        painter.setClipPath(pathp)
+                        painter.drawPixmap(0, 0, pix)
+                    finally:
+                        painter.end()
+                    return out
+                rounded = _rounded_pixmap(candidate, 48)
+                if rounded:
+                    avatar.setPixmap(rounded)
+                    avatar.setFixedSize(48, 48)
+                    avatar.setStyleSheet("border-radius: 24px; background: transparent;")
+                else:
+                    raise Exception("invalid pixmap")
+            else:
+                # No explicit user avatar provided — fall back to initial-letter avatar (handled below in except)
+                raise Exception("no avatar found")
+        except Exception:
+            # Fallback: initial letter avatar with prominent blue background
+            initial = (self.profile_display_name[:1] or "U").upper()
+            avatar.setText(initial)
+            avatar.setFixedSize(48, 48)
+            try:
+                avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                avatar.setStyleSheet("background:#2b7bf6; color:#ffffff; border-radius:24px; font-weight:800; font-size:16px;")
+                f = avatar.font()
+                f.setPointSize(16)
+                try:
+                    f.setWeight(QFont.Weight.DemiBold)
+                except Exception:
+                    f.setWeight(QFont.Weight.Bold)
+                avatar.setFont(f)
+            except Exception:
+                pass
+            # Center the initial and apply the strong blue circle style from the design
+            try:
+                avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                avatar.setStyleSheet("background:#2b7bf6; color:#ffffff; border-radius:20px; font-weight:800; font-size:16px;")
+                f = avatar.font()
+                f.setPointSize(16)
+                try:
+                    f.setWeight(QFont.Weight.DemiBold)
+                except Exception:
+                    f.setWeight(QFont.Weight.Bold)
+                avatar.setFont(f)
+            except Exception:
+                pass
+
+        name_box = QWidget()
+        nb_lyt = QVBoxLayout(name_box)
+        nb_lyt.setContentsMargins(0, 0, 0, 0)
+        nb_lyt.setSpacing(2)
+        name_lbl = QLabel(self.profile_display_name)
+        name_lbl.setObjectName("drawer-user-name")
+        # Apply theme-aware typography: bold name, darker in light mode, light in dark mode
+        try:
+            if getattr(self, 'dark_mode', False):
+                name_lbl.setStyleSheet('font-weight:800; font-size:16px; color:#e8e8e8;')
+            else:
+                name_lbl.setStyleSheet('font-weight:800; font-size:16px; color:#0f1724;')
+        except Exception:
+            name_lbl.setStyleSheet('font-weight:800;')
+        plan_lbl = QLabel(self.profile_plan)
+        plan_lbl.setObjectName("drawer-user-plan")
+        # Subtle plan label styling (smaller, slightly muted)
+        try:
+            if getattr(self, 'dark_mode', False):
+                plan_lbl.setStyleSheet('font-weight:700; font-size:13px; color:#9ca3af;')
+            else:
+                plan_lbl.setStyleSheet('font-weight:700; font-size:13px; color:#374151;')
+        except Exception:
+            pass
+        nb_lyt.addWidget(name_lbl)
+        nb_lyt.addWidget(plan_lbl)
+
+        profile_btn = QToolButton()
+        profile_btn.setObjectName("drawer-profile-btn")
+        profile_btn.setToolTip("계정")
+        profile_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        profile_btn.clicked.connect(self._show_profile_menu)
+        # expose for use by popup positioning / other helpers
+        self.drawer_profile_btn = profile_btn
+
+        # Make the whole profile area act as the toggle: hide small corner button and make wrapper clickable
+        try:
+            profile_btn.hide()
+        except Exception:
+            pass
+        try:
+            profile_wrap.setCursor(Qt.CursorShape.PointingHandCursor)
+            profile_wrap.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        except Exception:
+            pass
+
+        def _profile_click(e, s=self):
+            try:
+                s._show_profile_menu()
+            except Exception:
+                pass
+
+        def _profile_key(e, s=self):
+            try:
+                if e.key() in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
+                    s._show_profile_menu()
+            except Exception:
+                pass
+
+        # Attach handlers to the wrapper
+        try:
+            profile_wrap.mousePressEvent = _profile_click  # type: ignore[assignment]
+            profile_wrap.keyPressEvent = _profile_key  # type: ignore[assignment]
+        except Exception:
+            pass
+
+        pwl.addWidget(avatar)
+        pwl.addWidget(name_box)
+        pwl.addStretch()
+        pwl.addWidget(profile_btn)
+
+        lyt.addWidget(profile_wrap, 0)
+
         lyt.addStretch()
-        lyt.addWidget(self.settings_btn, alignment=Qt.AlignmentFlag.AlignBottom)
         return frame
+
+    def _build_drawer(self, parent: QWidget) -> None:
+        """Create a drawer panel and overlay attached to `parent` (hidden by default)."""
+        overlay = QWidget(parent)
+        overlay.setObjectName("drawer-overlay")
+        overlay.hide()
+        overlay.mousePressEvent = lambda e: self._set_drawer_open(False)  # type: ignore[assignment]
+        self.drawer_overlay = overlay
+
+        drawer = QFrame(parent)
+        drawer.setObjectName("drawer")
+        # Responsive drawer width (narrower: max 300, leave at least 120px of main content visible)
+        parent_rect = parent.rect()
+        # Ensure the drawer doesn't cover the whole screen on narrow windows — reserve 120px for main area
+        desired_w = max(180, min(300, parent_rect.width() - 120))
+        drawer.setFixedWidth(desired_w)
+        drawer.move(-desired_w, 0)
+        drawer.hide()
+        self.drawer_panel = drawer
+        # Install a global event filter once so clicks inside the drawer (but outside any popup)
+        # will close transient in-drawer popups (profile, backups, etc.). We guard to avoid re-installing.
+        try:
+            if not getattr(self, '_drawer_global_filter_installed', False):
+                app = QApplication.instance()
+                if app:
+                    app.installEventFilter(self)
+                    self._drawer_global_filter_installed = True
+        except Exception:
+            pass
+
+        dlyt = QVBoxLayout(drawer)
+        # Use minimal outer padding so content can use the full drawer area
+        dlyt.setContentsMargins(0, 0, 0, 0)
+        dlyt.setSpacing(6)
+
+        # Add sidebar content built by _build_sidebar
+        content = self._build_sidebar()
+        dlyt.addWidget(content) 
+        # Ensure any in-drawer popup is hidden when drawer initially built
+        self._hide_drawer_popup()
+        # Populate chat list from in-memory store
+        try:
+            self._render_chat_list()
+        except Exception:
+            pass
+
+    def _set_drawer_open(self, open_: bool, animate: bool = True) -> None:
+        self._drawer_open = open_
+        self._apply_drawer_state(animate=animate)
+        if not open_:
+            # hide any popups when closing the drawer
+            self._hide_drawer_popup()
+
+    def eventFilter(self, obj: QObject, event) -> bool:  # type: ignore[override]
+        """Global event filter to close the drawer popup when clicking elsewhere inside the drawer.
+
+        Behavior:
+        - If a mouse press occurs and the profile popup is visible, and the click is inside the drawer
+          but outside the popup, hide the popup and allow the event to continue (do not swallow it).
+        """
+        try:
+            from PySide6.QtCore import QEvent
+            if event.type() == QEvent.Type.MouseButtonPress:
+                if getattr(self, '_drawer_popup', None) and getattr(self, 'drawer_panel', None) and self._drawer_popup.isVisible():
+                    # Get global click position (Qt6: globalPosition returns QPointF)
+                    try:
+                        gp = event.globalPosition().toPoint()
+                    except Exception:
+                        try:
+                            gp = event.globalPos()
+                        except Exception:
+                            gp = None
+                    if gp is None:
+                        return super().eventFilter(obj, event)
+
+                    popup = self._drawer_popup
+                    # Map popup rect to global coordinates
+                    try:
+                        popup_tl = popup.mapToGlobal(popup.rect().topLeft())
+                        popup_rect_global = QRect(popup_tl, popup.size())
+                    except Exception:
+                        popup_rect_global = QRect()
+
+                    # If click is inside popup, do nothing
+                    if popup_rect_global.contains(gp):
+                        return super().eventFilter(obj, event)
+
+                    # Map drawer rect to global coords and check if click inside drawer
+                    try:
+                        drawer_tl = self.drawer_panel.mapToGlobal(self.drawer_panel.rect().topLeft())
+                        drawer_rect_global = QRect(drawer_tl, self.drawer_panel.size())
+                    except Exception:
+                        drawer_rect_global = QRect()
+
+                    if drawer_rect_global.contains(gp):
+                        # Clicked inside drawer but outside popup -> close popup
+                        try:
+                            self._hide_drawer_popup()
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+        return super().eventFilter(obj, event)
+
+    def _toggle_drawer(self) -> None:
+        self._drawer_open = not getattr(self, "_drawer_open", False)
+        self._apply_drawer_state(animate=True)
+
+    def _apply_drawer_state(self, animate: bool = True) -> None:
+        if not hasattr(self, "drawer_panel") or not hasattr(self, "drawer_overlay"):
+            return
+        self._update_drawer_geometry()
+        drawer_w = self.drawer_panel.width()
+
+        # Recompute start/end relative positions
+        if self._drawer_open:
+            start = QPoint(-drawer_w, 0)
+            end = QPoint(0, 0)
+        else:
+            start = QPoint(0, 0)
+            end = QPoint(-drawer_w, 0)
+
+        # Immediate show/hide behavior when animation is disabled
+        if not animate:
+            try:
+                if self._drawer_open:
+                    self.drawer_overlay.show()
+                    self.drawer_panel.show()
+                    self.drawer_overlay.raise_()
+                    self.drawer_panel.raise_()
+                    self.drawer_panel.move(end)
+                else:
+                    # Move off-screen and hide immediately
+                    self.drawer_panel.move(end)
+                    self.drawer_panel.hide()
+                    self.drawer_overlay.hide()
+            except Exception:
+                pass
+            # Re-enable toggle button if present
+            if hasattr(self, "drawer_toggle_btn"):
+                try:
+                    self.drawer_toggle_btn.setEnabled(True)
+                except Exception:
+                    pass
+            return
+
+        # Overlay visibility
+        if self._drawer_open:
+            try:
+                self.drawer_overlay.show()
+                self.drawer_panel.show()
+                self.drawer_overlay.raise_()
+                self.drawer_panel.raise_()
+            except Exception:
+                pass
+        else:
+            try:
+                self.drawer_overlay.raise_()
+                self.drawer_panel.raise_()
+            except Exception:
+                pass
+
+        # Disable the toggle to ensure a single click is effective while animating
+        if hasattr(self, "drawer_toggle_btn"):
+            try:
+                self.drawer_toggle_btn.setEnabled(False)
+            except Exception:
+                pass
+
+        # Stop previous animations if any and animate to the target using persistent animations
+        try:
+            # Drawer position animation
+            if getattr(self, "_drawer_anim", None):
+                try:
+                    self._drawer_anim.stop()
+                except Exception:
+                    pass
+            self._drawer_anim = QPropertyAnimation(self.drawer_panel, b"pos", self)
+            self._drawer_anim.setDuration(220)
+            self._drawer_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+            self._drawer_anim.setStartValue(start)
+            self._drawer_anim.setEndValue(end)
+
+            # Overlay fade animation (fade in on open, fade out on close)
+            if getattr(self, "_overlay_anim", None):
+                try:
+                    self._overlay_anim.stop()
+                except Exception:
+                    pass
+            self._overlay_anim = QPropertyAnimation(self.drawer_overlay, b"windowOpacity", self)
+            self._overlay_anim.setDuration(220)
+            self._overlay_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+            if self._drawer_open:
+                # show overlay and fade it in
+                try:
+                    self.drawer_overlay.setWindowOpacity(0.0)
+                    self.drawer_overlay.show()
+                except Exception:
+                    pass
+                self._overlay_anim.setStartValue(0.0)
+                self._overlay_anim.setEndValue(1.0)
+            else:
+                # fade overlay out
+                try:
+                    self._overlay_anim.setStartValue(self.drawer_overlay.windowOpacity())
+                except Exception:
+                    self._overlay_anim.setStartValue(1.0)
+                self._overlay_anim.setEndValue(0.0)
+
+            def _finish():
+                # Restore final visibility
+                if not self._drawer_open:
+                    try:
+                        self.drawer_panel.hide()
+                        # hide overlay after fade-out completes
+                        self.drawer_overlay.hide()
+                        # reset overlay opacity for next open
+                        self.drawer_overlay.setWindowOpacity(1.0)
+                    except Exception:
+                        pass
+                # Re-enable toggle button
+                if hasattr(self, "drawer_toggle_btn"):
+                    try:
+                        self.drawer_toggle_btn.setEnabled(True)
+                    except Exception:
+                        pass
+
+            # Wire up animations
+            self._overlay_anim.finished.connect(_finish)
+            self._drawer_anim.start()
+            self._overlay_anim.start()
+        except Exception:
+            # Fallback to immediate state change
+            try:
+                if self._drawer_open:
+                    self.drawer_panel.move(end)
+                    try:
+                        self.drawer_overlay.setWindowOpacity(1.0)
+                        self.drawer_overlay.show()
+                    except Exception:
+                        pass
+                else:
+                    self.drawer_panel.move(end)
+                    self.drawer_panel.hide()
+                    self.drawer_overlay.hide()
+            except Exception:
+                pass
+            if hasattr(self, "drawer_toggle_btn"):
+                try:
+                    self.drawer_toggle_btn.setEnabled(True)
+                except Exception:
+                    pass
+
+    def _update_drawer_geometry(self) -> None:
+        if not hasattr(self, "drawer_overlay") or not hasattr(self, "drawer_panel"):
+            return
+        central = self.centralWidget()
+        if central is None:
+            return
+        rect = central.rect()
+        self.drawer_overlay.setGeometry(rect)
+        # Adjust drawer width responsively when the central widget resizes
+        try:
+            # Ensure the drawer doesn't cover the whole screen on narrow windows — reserve 120px for main area
+            desired_w = max(180, min(300, rect.width() - 120))
+            self.drawer_panel.setFixedWidth(desired_w)
+        except Exception:
+            pass
+        self.drawer_panel.setFixedHeight(rect.height())
+
+    def resizeEvent(self, event) -> None:
+        """Reapply responsive layout when the window resizes."""
+        try:
+            self._apply_responsive_layout()
+            self._update_drawer_geometry()
+        except Exception:
+            pass
+        try:
+            super().resizeEvent(event)
+        except Exception:
+            pass
 
     def _apply_styles(self) -> None:
         theme = "light" if not self.dark_mode else "dark"
-        stylesheet = _load_theme(theme)
-        self.setStyleSheet(stylesheet)
+        theme_qss = _load_theme(theme)
+        # Adaptive overrides depending on theme
+        if not self.dark_mode:
+            override = "\nQWidget#main-area { background-color: #ffffff; color: #000000; }\nQWidget#central { background-color: #ffffff; color: #000000; }\nQMainWindow { background-color: #ffffff; color: #000000; }\n"
+            # Drawer-specific overrides + overlay dim for modal feeling
+            override += "\nQFrame#drawer { background-color: transparent; border-left: none; color: #000000; }\nQWidget#drawer-profile { padding: 8px; }\nQWidget#drawer-overlay { background: rgba(0,0,0,0.14); }\n"
+            # Ensure basic widgets inherit black text by default in simplified layout
+            override += "\nQWidget, QLabel, QTextEdit { color: #000000; }\n"
+            # Ensure profile popup rows have consistent sizing across themes
+            override += "\nQFrame#profile-popup QPushButton#profile-popup-action { font-size: 15px; padding: 6px 8px; font-weight:700; }\nQWidget#profile-popup-row { padding: 0px; }\nQCheckBox { min-width: 40px; min-height: 24px; }\n"
+        else:
+            # Dark mode colors
+            override = "\nQWidget#main-area { background-color: #000000; color: #ffffff; }\nQWidget#central { background-color: #000000; color: #ffffff; }\nQMainWindow { background-color: #000000; color: #ffffff; }\n"
+            override += "\nQFrame#drawer { background-color: transparent; border-left: none; color: #e8e8e8; }\nQWidget#drawer-profile { padding: 8px; }\nQWidget#drawer-overlay { background: rgba(0,0,0,0.36); }\n"
+            override += "\nQWidget, QLabel, QTextEdit { color: #e8e8e8; }\n"
+            override += "\nQFrame#profile-popup { background: #111111; color: #ffffff; }\nQFrame#profile-popup QPushButton#profile-popup-action { font-size: 15px; padding: 6px 8px; font-weight:700; color: #ffffff; }\nQFrame#profile-popup QLabel { color: #ffffff; }\nQWidget#profile-popup-row { padding: 0px; }\nQCheckBox { min-width: 40px; min-height: 24px; }\n"
+
+        self.setStyleSheet(theme_qss + override)
         # Re-apply distinct styling for help buttons after loading theme
         self._apply_help_button_style()
+        # Additional adaptive styling to match simplified layout
+        try:
+            # Make heading large and centered
+            if hasattr(self, "center_prompt"):
+                try:
+                    # Center prompt color follows theme
+                    cp_color = "#000000" if not self.dark_mode else "#ffffff"
+                    self.center_prompt.setStyleSheet(f"font-size:48px; font-weight:800; color:{cp_color};")
+                except Exception:
+                    pass
+
+            # Composer / script container: rounded, light background, subtle drop shadow
+            if hasattr(self, "script_container") and isinstance(self.script_container, QWidget):
+                try:
+                    sc_bg = "#ffffff" if not self.dark_mode else "#0f1724"
+                    sc_border = "#e5e7eb" if not self.dark_mode else "#374151"
+                    self.script_container.setStyleSheet(
+                        f"QFrame#composer-pill, QWidget#script-input-container {{ background: {sc_bg}; border: 1px solid {sc_border}; border-radius: 20px; }}")
+                except Exception:
+                    pass
+                try:
+                    shadow = QGraphicsDropShadowEffect(self.script_container)
+                    shadow.setBlurRadius(10)
+                    shadow.setOffset(0, 4)
+                    shadow.setColor(QColor(0, 0, 0, 18))
+                    self.script_container.setGraphicsEffect(shadow)
+                except Exception:
+                    pass
+
+            # Editor style — monospace and neutral color
+            if hasattr(self, "script_edit") and isinstance(self.script_edit, QTextEdit):
+                try:
+                    # Prefer UI app font (e.g., Inter) but keep monospace fallback for code blocks
+                    cp_color = "#000000" if not self.dark_mode else "#ffffff"
+                    self.script_edit.setStyleSheet(f"QTextEdit#composer-editor, QTextEdit#script-editor {{ background: transparent; border: none; font-family: 'Inter','Menlo','Monaco', monospace; font-size: 14px; color: {cp_color}; }}")
+                except Exception:
+                    pass
+
+            # HWP file pill
+            if hasattr(self, "hwp_filename_label"):
+                try:
+                    cp_color = "#000000" if not self.dark_mode else "#ffffff"
+                    hwp_bg = "#fff" if not self.dark_mode else "#111111"
+                    hwp_border = "#e5e7eb" if not self.dark_mode else "#374151"
+                    self.hwp_filename_label.setStyleSheet(f"background:{hwp_bg}; border:1px solid {hwp_border}; border-radius:12px; padding:6px 12px; font-weight:700; color:{cp_color};")
+                except Exception:
+                    pass
+
+            # Send button: circular, larger
+            if hasattr(self, "run_button") and isinstance(self.run_button, QPushButton):
+                try:
+                    self.run_button.setFixedSize(80, 80)
+                    btn_bg = "#f3f4f6" if not self.dark_mode else "#1f2937"
+                    cp_color = "#000000" if not self.dark_mode else "#ffffff"
+                    self.run_button.setStyleSheet(f"QPushButton#composer-send {{ background: {btn_bg}; border-radius: 40px; border: none; font-weight: 700; color: {cp_color}; }}")
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def _apply_responsive_layout(self) -> None:
+        """Adjust UI visibility and sizes for narrower (mobile) windows."""
+        try:
+            w = self.width()
+            # Mobile threshold
+            mobile = w <= 480
+
+            # Hero font sizing
+            if hasattr(self, "center_prompt"):
+                try:
+                    if mobile:
+                        cp_color = "#000000" if not self.dark_mode else "#ffffff"
+                        self.center_prompt.setStyleSheet(f"font-size:32px; font-weight:800; color:{cp_color}; margin-top: 6px;")
+                    else:
+                        cp_color = "#000000" if not self.dark_mode else "#ffffff"
+                        self.center_prompt.setStyleSheet(f"font-size:48px; font-weight:800; color:{cp_color};")
+                except Exception:
+                    pass
+
+            # Composer controls: show upload, mic, hwp pill on mobile, hide on desktop simplified layout
+            try:
+                if mobile:
+                    if hasattr(self, "add_file_btn"):
+                        self.add_file_btn.show()
+                    if hasattr(self, "mic_btn"):
+                        self.mic_btn.show()
+                    if hasattr(self, "hwp_filename_label"):
+                        self.hwp_filename_label.show()
+                    if hasattr(self, "hwp_add_btn"):
+                        self.hwp_add_btn.show()
+                    # Keep the model label hidden on mobile so the document pill can center
+                    if hasattr(self, "model_label"):
+                        self.model_label.hide()
+                    # Neutral send button on mobile (light gray)
+                    if hasattr(self, "run_button"):
+                        btn_bg = "#f3f4f6" if not self.dark_mode else "#1f2937"
+                        cp_color = "#000000" if not self.dark_mode else "#ffffff"
+                        self.run_button.setStyleSheet(f"QPushButton#composer-send {{ background: {btn_bg}; border-radius: 40px; border: none; font-weight: 700; color: {cp_color}; }}")
+                else:
+                    if hasattr(self, "add_file_btn"):
+                        self.add_file_btn.hide()
+                    if hasattr(self, "mic_btn"):
+                        self.mic_btn.hide()
+                    if hasattr(self, "hwp_filename_label"):
+                        self.hwp_filename_label.hide()
+                    if hasattr(self, "model_label"):
+                        self.model_label.hide()
+            except Exception:
+                pass
+
+            # Composer styling tweaks
+            try:
+                if hasattr(self, "script_container"):
+                    if mobile:
+                        self.script_container.setStyleSheet("QWidget#script-input-container { background: #ffffff; border: 1px solid #e5e7eb; border-radius: 24px; padding: 20px; }")
+                    else:
+                        self.script_container.setStyleSheet("QWidget#script-input-container { background: #f3f4f6; border: 1px solid #e5e7eb; border-radius: 20px; padding: 16px; }")
+            except Exception:
+                pass
+
+            # Ensure preview box is compact on mobile
+            if hasattr(self, "image_preview_container"):
+                try:
+                    if mobile:
+                        self.image_preview_container.setFixedHeight(140)
+                    else:
+                        self.image_preview_container.setFixedHeight(0)
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     def _apply_help_button_style(self) -> None:
-        """Apply a distinct, elegant style for the four help buttons."""
-        if not hasattr(self, "howto_button"):
+        """Apply a distinct, elegant style for the help buttons (and the HWP label button)."""
+        if (
+            not hasattr(self, "howto_button")
+            and not hasattr(self, "hwp_filename_label")
+            and not hasattr(self, "run_button")
+        ):
             return
-
+        # Theme-aware style:
+        # - Dark: solid #303030
+        # - Light: match composer background/border, black text/icons
         if self.dark_mode:
-            base_bg = "#182036"
-            hover_bg = "#202b45"
-            press_bg = "#1b2440"
-            border_color = "#3b4a6a"
-            hover_border = "#4b5d85"
-            press_border = "#35466b"
-            text_color = "#e8ecf8"
+            bg = "#303030"
+            border = "#303030"
+            hover_bg = "#383838"
+            hover_border = "#404040"
+            press_bg = "#2a2a2a"
+            press_border = "#4a4a4a"
+            text_color = "#e8e8e8"
         else:
-            base_bg = "#eef3ff"      # gentle blue tint
-            hover_bg = "#e3ebff"
-            press_bg = "#d8e1ff"
-            border_color = "#cad8ff"
-            hover_border = "#b9c9fb"
-            press_border = "#aebff8"
-            text_color = "#1c2d5a"
+            bg = "#f4f4f5"          # same as light composer background
+            border = "#e5e7eb"      # same as light composer border
+            hover_bg = "#ececf1"
+            hover_border = "#d1d5db"
+            press_bg = "#e5e7eb"
+            press_border = "#cbd5e1"
+            text_color = "#000000"  # black
 
-        style = f"""
+        help_style = f"""
         QPushButton {{
-            background-color: {base_bg};
+            background-color: {bg};
             color: {text_color};
-            border: 1px solid {border_color};
-            border-radius: 10px;
+            border: 1px solid {border};
+            border-radius: 14px;
             padding: 8px 14px;
-            font-weight: 600;
-            text-align: left;
+            font-weight: 700;
+            font-size: 13px;
+            text-align: center;
+            qproperty-iconSize: 18px 18px;
         }}
         QPushButton:hover {{
             background-color: {hover_bg};
-            border-color: {hover_border};
+            border: 1px solid {hover_border};
         }}
         QPushButton:pressed {{
             background-color: {press_bg};
-            border-color: {press_border};
+            border: 1px solid {press_border};
         }}
         """
 
@@ -822,17 +2164,169 @@ class MainWindow(QMainWindow):
             getattr(self, "howto_button", None),
             getattr(self, "latex_button", None),
             getattr(self, "ai_generate_button", None),
-            getattr(self, "ai_optimize_button", None),
         ):
             if btn:
-                btn.setStyleSheet(style)
+                btn.setStyleSheet(help_style)
+
+        # HWP label button: base background should match the help button hover color.
+        hwp_bg = hover_bg
+        hwp_border = hover_border
+        hwp_style = f"""
+        QPushButton {{
+            background-color: {hwp_bg};
+            color: {text_color};
+            border: 1px solid {hwp_border};
+            border-radius: 20px;
+            padding: 8px 18px;
+            font-weight: 800;
+            font-size: 15px;
+            text-align: center;
+        }}
+        QPushButton:hover {{
+            background-color: {hwp_bg};
+            border: 1px solid {hwp_border};
+        }}
+        QPushButton:pressed {{
+            background-color: {press_bg};
+            border: 1px solid {press_border};
+        }}
+        """
+        if getattr(self, "hwp_filename_label", None):
+            self.hwp_filename_label.setStyleSheet(hwp_style)
+
+        # Send button: match HWP hover color as the base background.
+        send_style = f"""
+        QPushButton#composer-send {{
+            background-color: #5377f6;
+            color: #ffffff;
+            border: none;
+            border-radius: 26px;
+            min-width: 52px;
+            min-height: 52px;
+            max-width: 52px;
+            max-height: 52px;
+            font-weight: 700;
+            font-size: 20px;
+        }}
+        QPushButton#composer-send:hover {{
+            background-color: #3e5fc7;
+        }}
+        QPushButton#composer-send:pressed {{
+            background-color: #2e47a0;
+        }}
+        """
+        if getattr(self, "run_button", None):
+            self.run_button.setStyleSheet(send_style)
+            # Re-apply the send icon after overriding the stylesheet so asset variant is used
+            try:
+                self._set_send_icon(size_px=40)
+            except Exception:
+                try:
+                    self._set_material_symbol(self.run_button, "arrow_upward", fallback="↑", px=34)
+                except Exception:
+                    pass
 
     def _set_app_logo(self) -> None:
         """Set main title logo based on theme."""
         if hasattr(self, "logo_label"):
             # Use the formulite_logo files
             assets_dir = Path(__file__).resolve().parents[1] / "public" / "img"
-            
+
+    def _set_send_icon(self, size_px: int = 40) -> None:
+        """Set the composer send button icon to send.png / send-dark.png if available, stripping background as needed."""
+        try:
+            if getattr(self, 'run_button', None) is None:
+                return
+            assets_dir = Path(__file__).resolve().parents[1] / "public" / "img"
+            # Prefer dark variant when in dark mode
+            candidate = assets_dir / ("send-dark.png" if getattr(self, 'dark_mode', False) else "send.png")
+            if not candidate.exists():
+                # Try the alternate variant
+                alt = assets_dir / ("send.png" if getattr(self, 'dark_mode', False) else "send-dark.png")
+                if alt.exists():
+                    candidate = alt
+                else:
+                    candidate = None
+            if candidate is not None:
+                # Try setting the file icon directly first (no processing) using a slightly smaller size
+                try:
+                    direct_icon = QIcon(str(candidate))
+                    direct_size = max(12, size_px - 8)
+                    self.run_button.setIcon(direct_icon)
+                    self.run_button.setIconSize(QSize(direct_size, direct_size))
+                    # Quick transparency test on the direct pixmap; if too transparent, fall back to processing
+                    direct_pix = direct_icon.pixmap(direct_size, direct_size)
+                    def _almost_transparent(pix: QPixmap, thresh: float = 0.85) -> bool:
+                        try:
+                            img = pix.toImage().convertToFormat(QImage.Format_ARGB32)
+                            w = img.width(); h = img.height()
+                            total = w * h
+                            if total == 0:
+                                return True
+                            transparent = 0
+                            for y in range(h):
+                                for x in range(w):
+                                    if QColor(img.pixel(x, y)).alpha() < 16:
+                                        transparent += 1
+                            return (transparent / total) >= thresh
+                        except Exception:
+                            return False
+                    if not _almost_transparent(direct_pix, thresh=0.85):
+                        # direct icon looks fine — keep it
+                        self.run_button.setText("")
+                        return
+                except Exception:
+                    # fall through to processing
+                    pass
+
+                # Otherwise, attempt to strip uniform backgrounds (use higher tolerance) and aggressive border removal
+                pix = QPixmap(str(candidate))
+                processed = self._make_pixmap_background_transparent(pix, tolerance=40) or pix
+                try:
+                    corner_alpha = processed.toImage().pixelColor(0, 0).alpha()
+                except Exception:
+                    corner_alpha = 255
+                if corner_alpha > 16:
+                    try:
+                        img = pix.toImage().convertToFormat(QImage.Format_ARGB32)
+                        w = img.width()
+                        h = img.height()
+                        sr = sg = sb = count = 0
+                        for x in range(w):
+                            for y in (0, h - 1):
+                                c = QColor(img.pixel(x, y))
+                                if c.alpha() > 16:
+                                    sr += c.red(); sg += c.green(); sb += c.blue(); count += 1
+                        for y in range(h):
+                            for x in (0, w - 1):
+                                c = QColor(img.pixel(x, y))
+                                if c.alpha() > 16:
+                                    sr += c.red(); sg += c.green(); sb += c.blue(); count += 1
+                        if count > 0:
+                            sr //= count; sg //= count; sb //= count
+                            tol = 80
+                            for yy in range(h):
+                                for xx in range(w):
+                                    c = QColor(img.pixel(xx, yy))
+                                    if abs(c.red() - sr) <= tol and abs(c.green() - sg) <= tol and abs(c.blue() - sb) <= tol:
+                                        img.setPixelColor(xx, yy, QColor(0, 0, 0, 0))
+                            processed = QPixmap.fromImage(img)
+                    except Exception:
+                        pass
+
+                processed = processed.scaled(size_px, size_px, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                self.run_button.setIcon(QIcon(processed))
+                self.run_button.setIconSize(QSize(size_px, size_px))
+                self.run_button.setText("")
+                return
+            # Fallback to material symbol
+            self._set_material_symbol(self.run_button, "arrow_upward", fallback="↑", px=max(20, size_px - 8))
+        except Exception:
+            try:
+                self._set_material_symbol(self.run_button, "arrow_upward", fallback="↑", px=max(20, size_px - 8))
+            except Exception:
+                pass
+
             # Try .jpg first, then .png
             logo_paths = [
                 assets_dir / "formulite_logo.png"
@@ -852,24 +2346,150 @@ class MainWindow(QMainWindow):
                 self.logo_label.setText("[∑]")
                 self.logo_label.setStyleSheet("font-size: 36px; color: #5377f6;")
 
+    def _set_material_symbol(self, widget, ligature: str, fallback: str, px: int = 22) -> None:
+        """Set a Material Symbols Outlined ligature; fall back to plain text (delegates to design)."""
+        try:
+            design.set_material_symbol(widget, ligature, fallback, px, getattr(self, "_material_symbols_available", False), getattr(self, "dark_mode", False))
+        except Exception:
+            # Do not crash UI when setting icons
+            widget.setText(fallback)
+
+    def _set_material_symbol_icon(self, widget, ligature: str, px: int = 20) -> None:
+        """Render a Material Symbols Outlined ligature into a QIcon (delegates to design)."""
+        try:
+            design.set_material_symbol_icon(widget, ligature, px, getattr(self, "_material_symbols_available", False), getattr(self, "dark_mode", False))
+        except Exception:
+            widget.setIcon(QIcon())
+
+    def _render_material_symbol_icon(self, ligature: str, px: int, color: QColor) -> QIcon:
+        """Return a QIcon rendered via design helper."""
+        return design.render_material_symbol_icon(ligature, px, color)
+
+    def _render_delete_icon(self, px: int = 16, color: QColor | None = None) -> QIcon:
+        """Render a small, crisp trash-outline QIcon using QPainter.
+
+        This avoids relying on external fonts or assets and ensures consistent
+        visuals across platforms.
+        """
+        try:
+            if color is None:
+                color = QColor("#9ca3af") if not getattr(self, "dark_mode", False) else QColor("#e8e8e8")
+
+            pm = QPixmap(px, px)
+            pm.fill(Qt.GlobalColor.transparent)
+
+            painter = QPainter(pm)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            pen = QPen(color)
+            pen.setWidthF(max(1.0, px * 0.09))
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+
+            # Draw trash lid (a short rounded rectangle / line)
+            lid_y = px * 0.28
+            left = px * 0.22
+            right = px * 0.78
+            painter.drawLine(int(left), int(lid_y), int(right), int(lid_y))
+
+            # Draw small handle center above lid
+            handle_w = px * 0.20
+            handle_left = (px - handle_w) / 2
+            painter.drawRect(int(handle_left), int(lid_y - (px * 0.06)), int(handle_w), int(px * 0.06))
+
+            # Draw body (rounded rect)
+            body_x = px * 0.20
+            body_y = px * 0.40
+            body_w = px * 0.60
+            body_h = px * 0.48
+            painter.drawRoundedRect(int(body_x), int(body_y), int(body_w), int(body_h), 2, 2)
+
+            # Draw inner vertical guide lines to suggest slats
+            slat_x1 = int(px * 0.36)
+            slat_x2 = int(px * 0.5)
+            slat_x3 = int(px * 0.64)
+            top = int(body_y + body_h * 0.2)
+            bottom = int(body_y + body_h * 0.78)
+            painter.drawLine(slat_x1, top, slat_x1, bottom)
+            painter.drawLine(slat_x2, top, slat_x2, bottom)
+            painter.drawLine(slat_x3, top, slat_x3, bottom)
+
+            painter.end()
+            return QIcon(pm)
+        except Exception:
+            return QIcon()
+
+    def _set_drawer_item_icon(self, button: QPushButton, ligature: str, fallback: str = "", px: int = 20) -> None:
+        """Set an icon for a drawer item. Uses Material Symbols if available, else prefixes fallback text."""
+        color = QColor("#000000") if not getattr(self, "dark_mode", False) else QColor("#e8e8e8")
+        if getattr(self, "_material_symbols_available", False):
+            try:
+                button.setIcon(self._render_material_symbol_icon(ligature, px, color))
+                button.setIconSize(QSize(px, px))
+                return
+            except Exception:
+                pass
+        # Fallback: prefix text
+        if fallback and not button.text().startswith(fallback):
+            button.setText(f"{fallback} {button.text()}".strip())
+
     def _refresh_icons(self) -> None:
         """Reapply themed icons after a theme change."""
-        self._apply_button_icon(self.add_file_btn, "plus", "+", QSize(32, 32))
+        # Ensure upload/add-file uses the plus glyph (themed)
+        try:
+            self._apply_button_icon(self.add_file_btn, "plus", "+", QSize(32, 32))
+        except Exception:
+            self._apply_button_icon(self.add_file_btn, "plus", "+", QSize(32, 32))
+        # Refresh HWP + button with theme-aware asset when available
+        try:
+            assets_dir = Path(__file__).resolve().parents[1] / "public" / "img"
+            candidate = assets_dir / ("plus-dark.png" if getattr(self, 'dark_mode', False) else "plus.png")
+            if not candidate.exists():
+                alt = assets_dir / ("plus.png" if getattr(self, 'dark_mode', False) else "plus-dark.png")
+                if alt.exists():
+                    candidate = alt
+                else:
+                    candidate = None
+            if getattr(self, 'hwp_add_btn', None) and candidate is not None:
+                self.hwp_add_btn.setIcon(QIcon(str(candidate)))
+                self.hwp_add_btn.setIconSize(QSize(24, 24))
+            elif getattr(self, 'hwp_add_btn', None):
+                self._apply_button_icon(self.hwp_add_btn, "plus", "+", QSize(24, 24))
+        except Exception:
+            if getattr(self, 'hwp_add_btn', None):
+                self._apply_button_icon(self.hwp_add_btn, "plus", "+", QSize(24, 24))
         self._apply_button_icon(self.ai_selector_btn, "ai", "[AI]", QSize(28, 28))
         self._apply_button_icon(self.mic_btn, "mic", "[MIC]", QSize(28, 28))
         self.howto_button.setText("도움말")
         self._apply_button_icon(self.howto_button, "help", "[?]", QSize(20, 20), preserve_text=True)
         self.ai_generate_button.setText("AI 생성")
         self._apply_button_icon(self.ai_generate_button, "generate", "[+]", QSize(20, 20), preserve_text=True)
-        self.ai_optimize_button.setText("AI 최적화")
-        self._apply_button_icon(self.ai_optimize_button, "optimize", "[*]", QSize(20, 20), preserve_text=True)
+        # AI Optimize button removed from main UI; keep handler methods but no button present.
         # Ensure help buttons keep their distinct inline styling after icon refresh
         self._apply_help_button_style()
-        self._apply_button_icon(self.save_btn, "save", "[S]", QSize(32, 32))
-        self._apply_button_icon(self.load_btn, "load", "[L]", QSize(32, 32))
-        self._apply_button_icon_themed(self.backup_icon_btn, "backup_icon", "[B]", QSize(32, 32))
-        self._set_theme_glyph(self.dark_mode)
-        self._set_settings_glyph()
+        if hasattr(self, "save_btn"):
+            self._apply_button_icon(self.save_btn, "save", "[S]", QSize(32, 32))
+        if hasattr(self, "load_btn"):
+            self._apply_button_icon(self.load_btn, "load", "[L]", QSize(32, 32))
+        if hasattr(self, "backup_icon_btn"):
+            self._apply_button_icon_themed(self.backup_icon_btn, "backup_icon", "[B]", QSize(32, 32))
+        if hasattr(self, "theme_btn"):
+            self._set_theme_glyph(self.dark_mode)
+        if hasattr(self, "settings_btn"):
+            self._set_settings_glyph()
+        # Update drawer hamburger icon (use processing helper so background is stripped & sizing is consistent)
+        try:
+            if getattr(self, 'drawer_toggle_btn', None):
+                self._set_drawer_toggle_icon(size_px=36)
+        except Exception:
+            pass
+        # Refresh the send button icon using themed asset when applicable
+        try:
+            if getattr(self, 'run_button', None):
+                self._set_send_icon(size_px=40)
+        except Exception:
+            pass
         if hasattr(self, "template_buttons"):
             for btn, template in self.template_buttons:
                 icon_key = template.get("icon_key", "")
@@ -897,8 +2517,11 @@ class MainWindow(QMainWindow):
                         )
                 else:
                     btn.setText(f"{fallback} {label}")
-        self._set_app_logo()
-
+        # Refresh chat list so per-row icons (edit/delete) are rebuilt with current theme
+        try:
+            self._render_chat_list()
+        except Exception:
+            pass
     def _show_log_context_menu(self, pos) -> None:
         """Custom right-click menu for the log output (Korean labels)."""
         menu = QMenu(self)
@@ -1096,11 +2719,17 @@ class MainWindow(QMainWindow):
             print(f"Error adding image preview: {e}")
 
     def _show_ai_selector(self) -> None:
-        """Show AI model selector dialog."""
-        # Placeholder for AI model selection
-        # TODO: Implement AI model dropdown/menu with options like GPT-4, GPT-3.5, etc.
-        # Suppress alert until feature is implemented
-        return
+        """Show AI model selector dropdown — simple popup inside top bar."""
+        try:
+            # Small inline popup to choose model (in-drawer-less)
+            menu = QMenu(self)
+            menu.addAction("gpt-4o-mini")
+            menu.addAction("gpt-4o")
+            menu.addAction("gpt-5")
+            pos = self.model_label.mapToGlobal(self.model_label.rect().bottomLeft()) if hasattr(self, "model_label") else QCursor.pos()
+            menu.exec(pos)
+        except Exception:
+            return
 
     def _handle_voice_input(self) -> None:
         """Handle microphone/voice input button click."""
@@ -1210,6 +2839,432 @@ class MainWindow(QMainWindow):
         )
         msg.exec()
 
+    def _show_profile_menu(self) -> None:
+        """Show compact profile menu anchored to the drawer profile button.
+
+        Includes: 다운로드(저장), 불러오기(열기), 백업 및 복원, 다크 모드 토글, 설정, 도움말, 로그아웃
+        """
+        btn = getattr(self, "drawer_profile_btn", None)
+        if btn is None or not hasattr(self, "drawer_panel"):
+            return
+
+        # Toggle existing popup
+        if self._drawer_popup and self._drawer_popup.isVisible():
+            self._hide_drawer_popup()
+            return
+
+        popup = QFrame(self.drawer_panel)
+        popup.setObjectName("profile-popup")
+        popup.setFrameShape(QFrame.Shape.StyledPanel)
+        # Use theme-aware background and text color so popup matches light/dark mode
+        try:
+            if self.dark_mode:
+                popup.setStyleSheet("background: #111111; color: #ffffff; border: none; border-radius:10px;")
+            else:
+                popup.setStyleSheet("background: #ffffff; color: #0f1724; border: none; border-radius:10px;")
+        except Exception:
+            pass
+        # subtle shadow for depth
+        try:
+            shadow = QGraphicsDropShadowEffect(popup)
+            # Use a slightly larger blur and zero offset so the shadow appears evenly around all edges
+            shadow.setBlurRadius(22)
+            shadow.setOffset(0, 0)
+            shadow.setColor(QColor(0, 0, 0, 30) if not self.dark_mode else QColor(0, 0, 0, 60))
+            popup.setGraphicsEffect(shadow)
+        except Exception:
+            pass
+
+        layout = QVBoxLayout(popup)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
+
+        # Top: avatar + name + handle
+        top = QWidget()
+        t_lyt = QHBoxLayout(top)
+        t_lyt.setContentsMargins(0, 0, 0, 0)
+        t_lyt.setSpacing(10)
+        avatar_src = getattr(self, 'profile_avatar_path', None)
+        avatar_lbl = QLabel()
+        avatar_lbl.setFixedSize(48, 48)
+        avatar_lbl.setObjectName('profile-popup-avatar')
+        try:
+            assets_dir = Path(__file__).resolve().parents[1] / "public" / "img"
+            # Only use an explicit user-provided avatar path (do not fall back to bundled placeholders)
+            candidate = avatar_src
+            if candidate:
+                candidate = Path(candidate)
+            if candidate and Path(candidate).exists():
+                pix = QPixmap(str(candidate)).scaled(48, 48, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
+                out = QPixmap(48, 48)
+                out.fill(Qt.GlobalColor.transparent)
+                painter = QPainter(out)
+                try:
+                    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+                    pathp = QPainterPath()
+                    pathp.addEllipse(0, 0, 48, 48)
+                    painter.setClipPath(pathp)
+                    painter.drawPixmap(0, 0, pix)
+                finally:
+                    painter.end()
+                avatar_lbl.setPixmap(out)
+                avatar_lbl.setStyleSheet('border-radius: 24px; background: transparent;')
+            else:
+                # Fallback to initial letter blue circle
+                initial = (self.profile_display_name[:1] or 'U').upper()
+                avatar_lbl.setText(initial)
+                avatar_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                avatar_lbl.setFixedSize(48, 48)
+                avatar_lbl.setStyleSheet('background:#2b7bf6; color:#fff; border-radius:24px; font-weight:800; font-size:18px;')
+                f = avatar_lbl.font()
+                f.setPointSize(18)
+                try:
+                    f.setWeight(QFont.Weight.DemiBold)
+                except Exception:
+                    f.setWeight(QFont.Weight.Bold)
+                avatar_lbl.setFont(f)
+        except Exception:
+            initial = (self.profile_display_name[:1] or 'U').upper()
+            avatar_lbl.setText(initial)
+            avatar_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            avatar_lbl.setFixedSize(48, 48)
+            avatar_lbl.setStyleSheet('background:#2b7bf6; color:#fff; border-radius:24px; font-weight:800; font-size:18px;')
+            f = avatar_lbl.font()
+            f.setPointSize(18)
+            try:
+                f.setWeight(QFont.Weight.DemiBold)
+            except Exception:
+                f.setWeight(QFont.Weight.Bold)
+            avatar_lbl.setFont(f)
+
+        name_col = QWidget()
+        nc_lyt = QVBoxLayout(name_col)
+        nc_lyt.setContentsMargins(0, 0, 0, 0)
+        nc_lyt.setSpacing(2)
+        name_label = QLabel(self.profile_display_name)
+        name_label.setStyleSheet('font-weight:800; font-size:16px;')
+        handle_label = QLabel(f"@{(self.profile_handle or 'kinn')}" )
+        handle_label.setStyleSheet('color:#9ca3af;')
+        nc_lyt.addWidget(name_label)
+        nc_lyt.addWidget(handle_label)
+
+        t_lyt.addWidget(avatar_lbl)
+        t_lyt.addWidget(name_col)
+        layout.addWidget(top)
+
+        # divider
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet('color:#e6e7eb;')
+        layout.addWidget(sep)
+
+        # Helper to add a menu row with icon
+        def add_row(icon_key: str, text: str, handler=None, checkable=False, checked=False):
+            row = QWidget()
+            row.setObjectName('profile-popup-row')
+            # remove any default background so rows are unboxed
+            try:
+                row.setStyleSheet('background: transparent; border: none;')
+            except Exception:
+                pass
+            r_lyt = QHBoxLayout(row)
+            # center items vertically and reduce vertical padding
+            r_lyt.setContentsMargins(0, 4, 0, 4)
+            r_lyt.setSpacing(12)
+            r_lyt.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+            ic = QLabel()
+            # slightly smaller icon container for tighter layout
+            ic.setFixedSize(32, 32)
+            ic.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+            # Helper to load local assets with fallback to theme icons, and optionally tint
+            def _load_icon_for(key: str, sz: int = 18, tint_black: bool = False):
+                """Load an icon from public/img or themed paths. If tint_black is True, tint to black in light mode or to light gray in dark mode."""
+                try:
+                    assets_dir = Path(__file__).resolve().parents[1] / "public" / "img"
+                    candidate = None
+                    # prefer explicit file names and theme-specific variants
+                    candidates = [
+                        f"{key}.png",
+                        f"{key}.svg",
+                        f"{key}-icon.png",
+                        f"{key}-icon.svg",
+                        f"{key}-light.png",
+                        f"{key}-light.svg",
+                        f"{key}_light.png",
+                        f"{key}_light.svg",
+                        f"{key}-black.png",
+                        f"{key}_black.png",
+                    ]
+                    for name in candidates:
+                        p = assets_dir / name
+                        if p.exists():
+                            candidate = p
+                            break
+
+                    pix = None
+                    if candidate:
+                        pix = QPixmap(str(candidate))
+                    else:
+                        # fallback to themed resolver (checks icon-key-light/dark variants)
+                        icon_path = design.get_icon_path(key, False, use_theme=True)
+                        if icon_path:
+                            pix = QPixmap(str(icon_path))
+                        else:
+                            # last resort: try without theme
+                            icon_path = self._get_icon_path_str(key)
+                            if icon_path:
+                                pix = QPixmap(icon_path)
+
+                    if pix and not pix.isNull():
+                        pix = pix.scaled(sz, sz, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                        if tint_black:
+                            # choose tint color depending on current theme: black for light mode, light gray for dark mode
+                            tint_color = QColor(0, 0, 0) if not self.dark_mode else QColor(255, 255, 255)
+                            out = QPixmap(pix.size())
+                            out.fill(Qt.GlobalColor.transparent)
+                            p = QPainter(out)
+                            try:
+                                p.setRenderHint(QPainter.RenderHint.Antialiasing)
+                                p.fillRect(out.rect(), tint_color)
+                                p.setCompositionMode(QPainter.CompositionMode.DestinationIn)
+                                p.drawPixmap(0, 0, pix)
+                            finally:
+                                p.end()
+                            return out
+                        return pix
+                except Exception:
+                    pass
+                return None
+
+            # Use specific keys to decide size and tint; apply special cases
+            icon_pix = None
+            if icon_key == 'upgrade':
+                # Prefer an explicit dark variant in dark mode if present, otherwise fall back to themed resolver
+                try:
+                    assets_dir = Path(__file__).resolve().parents[1] / "public" / "img"
+                    cand = assets_dir / ("upgrade-dark.png" if self.dark_mode else "upgrade.png")
+                    if cand.exists():
+                        icon_pix = QPixmap(str(cand)).scaled(24, 24, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                    else:
+                        icon_pix = _load_icon_for(icon_key, sz=24, tint_black=False)
+                except Exception:
+                    icon_pix = _load_icon_for(icon_key, sz=24, tint_black=False)
+            elif icon_key == 'profile':
+                # Prefer theme-specific profile asset when available
+                try:
+                    assets_dir = Path(__file__).resolve().parents[1] / "public" / "img"
+                    cand = assets_dir / ("profile-dark.png" if self.dark_mode else "profile.png")
+                    if cand.exists():
+                        icon_pix = QPixmap(str(cand)).scaled(24, 24, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                    else:
+                        icon_pix = _load_icon_for(icon_key, sz=24, tint_black=False)
+                except Exception:
+                    icon_pix = _load_icon_for(icon_key, sz=24, tint_black=False)
+            elif icon_key == 'light':
+                # Prefer explicit 'moon-light.svg' in light mode (show moon to switch to dark),
+                # and 'light-dark.svg' in dark mode (show sun to switch to light)
+                try:
+                    assets_dir = Path(__file__).resolve().parents[1] / "public" / "img"
+                    if not self.dark_mode:
+                        cand = assets_dir / "moon-light.svg"
+                    else:
+                        cand = assets_dir / "light-dark.svg"
+                    if cand.exists():
+                        icon_pix = QPixmap(str(cand)).scaled(28, 28, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                    else:
+                        icon_pix = _load_icon_for(icon_key, sz=28, tint_black=False)
+                except Exception:
+                    icon_pix = _load_icon_for(icon_key, sz=28, tint_black=False)
+            elif icon_key == 'settings':
+                # Prefer explicit theme-specific settings asset: settings-dark.svg in dark mode, settings-light.png otherwise.
+                try:
+                    assets_dir = Path(__file__).resolve().parents[1] / "public" / "img"
+                    if self.dark_mode:
+                        cand = assets_dir / "settings-dark.svg"
+                        if cand.exists():
+                            s_pix = QPixmap(str(cand)).scaled(20, 20, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                            icon_pix = s_pix
+                        else:
+                            # fallback to other candidates
+                            cand2 = assets_dir / "settings-list.png"
+                            if cand2.exists():
+                                s_pix = QPixmap(str(cand2)).scaled(20, 20, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                                icon_pix = s_pix
+                            else:
+                                icon_pix = _load_icon_for(icon_key, sz=18, tint_black=True)
+                    else:
+                        cand = assets_dir / "settings-light.png"
+                        if cand.exists():
+                            s_pix = QPixmap(str(cand)).scaled(20, 20, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                            icon_pix = s_pix
+                        else:
+                            cand2 = assets_dir / "settings-list.png"
+                            if cand2.exists():
+                                s_pix = QPixmap(str(cand2)).scaled(20, 20, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                                icon_pix = s_pix
+                            else:
+                                icon_pix = _load_icon_for(icon_key, sz=18, tint_black=True)
+                except Exception:
+                    icon_pix = _load_icon_for(icon_key, sz=18, tint_black=True)
+                # In dark mode, ensure this icon is white for visibility
+                try:
+                    if icon_pix and self.dark_mode:
+                        out = QPixmap(icon_pix.size())
+                        out.fill(Qt.GlobalColor.transparent)
+                        p = QPainter(out)
+                        try:
+                            p.setRenderHint(QPainter.RenderHint.Antialiasing)
+                            p.fillRect(out.rect(), QColor(255,255,255))
+                            p.setCompositionMode(QPainter.CompositionMode.DestinationIn)
+                            p.drawPixmap(0, 0, icon_pix)
+                        finally:
+                            p.end()
+                        icon_pix = out
+                except Exception:
+                    pass
+            elif icon_key == 'logout':
+                # Prefer explicit dark variant in dark mode, otherwise fall back to themed resolver
+                try:
+                    assets_dir = Path(__file__).resolve().parents[1] / "public" / "img"
+                    cand = assets_dir / ("logout-dark.png" if self.dark_mode else "logout.png")
+                    if cand.exists():
+                        icon_pix = QPixmap(str(cand)).scaled(24, 24, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                    else:
+                        icon_pix = _load_icon_for(icon_key, sz=24, tint_black=False)
+                except Exception:
+                    icon_pix = _load_icon_for(icon_key, sz=24, tint_black=False)
+            else:
+                icon_pix = _load_icon_for(icon_key, sz=18, tint_black=False)
+
+            try:
+                if icon_pix:
+                    # In dark mode, tint icons to white for high contrast
+                    try:
+                        if self.dark_mode:
+                            out = QPixmap(icon_pix.size())
+                            out.fill(Qt.GlobalColor.transparent)
+                            p = QPainter(out)
+                            try:
+                                p.setRenderHint(QPainter.RenderHint.Antialiasing)
+                                p.fillRect(out.rect(), QColor(255,255,255))
+                                p.setCompositionMode(QPainter.CompositionMode.DestinationIn)
+                                p.drawPixmap(0, 0, icon_pix)
+                            finally:
+                                p.end()
+                            icon_pix = out
+                    except Exception:
+                        pass
+                    ic.setPixmap(icon_pix)
+                else:
+                    # Explicit fallback for the theme icon: try <key>-icon.png (e.g., light-icon.png)
+                    try:
+                        assets_dir = Path(__file__).resolve().parents[1] / "public" / "img"
+                        fallback_name = f"{icon_key}-icon.png"
+                        fb = assets_dir / fallback_name
+                        if fb.exists():
+                            # Use a larger scaled size for logout, otherwise default to 18
+                            sz = 24 if icon_key == 'logout' else 18
+                            fb_pix = QPixmap(str(fb)).scaled(sz, sz, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                            # Tint fallback to white in dark mode as well
+                            try:
+                                if self.dark_mode:
+                                    out = QPixmap(fb_pix.size())
+                                    out.fill(Qt.GlobalColor.transparent)
+                                    p = QPainter(out)
+                                    try:
+                                        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+                                        p.fillRect(out.rect(), QColor(255,255,255))
+                                        p.setCompositionMode(QPainter.CompositionMode.DestinationIn)
+                                        p.drawPixmap(0, 0, fb_pix)
+                                    finally:
+                                        p.end()
+                                    fb_pix = out
+                            except Exception:
+                                pass
+                            ic.setPixmap(fb_pix)
+                        else:
+                            ic.setStyleSheet('background: transparent;')
+                    except Exception:
+                        ic.setStyleSheet('background: transparent;')
+            except Exception:
+                pass
+
+            lbl = QPushButton(text)
+            lbl.setObjectName('profile-popup-action')
+            lbl.setCursor(Qt.CursorShape.PointingHandCursor)
+            lbl.setFlat(True)
+            # Ensure the row button does not get global dialog button styling
+            try:
+                lbl.setStyleSheet("background: transparent; border: none; text-align: left; font-weight:700; font-size:15px; padding: 6px 8px;")
+            except Exception:
+                pass
+            if handler:
+                lbl.clicked.connect(lambda checked=False, h=handler: (h(), self._hide_drawer_popup()))
+            if checkable:
+                # Remove checkbox: clicking the row toggles theme directly
+                def _row_click(e, s=self):
+                    try:
+                        new_state = not s.dark_mode
+                        s._toggle_theme(new_state)
+                    except Exception:
+                        pass
+                try:
+                    lbl.clicked.connect(lambda checked=False, s=self: s._toggle_theme(not s.dark_mode))
+                except Exception:
+                    pass
+                try:
+                    row.mousePressEvent = _row_click  # type: ignore[assignment]
+                except Exception:
+                    pass
+                r_lyt.addWidget(ic)
+                r_lyt.addWidget(lbl)
+                r_lyt.addStretch()
+            else:
+                r_lyt.addWidget(ic)
+                r_lyt.addWidget(lbl)
+            layout.addWidget(row)
+
+        # Upgrade (opens billing/upgrade page)
+        def _open_upgrade():
+            try:
+                QDesktopServices.openUrl(QUrl('https://formulite.vercel.app/pricing'))
+            except Exception:
+                pass
+
+        def _open_profile():
+            try:
+                QDesktopServices.openUrl(QUrl('https://formulite.vercel.app/profile'))
+            except Exception:
+                pass
+
+        add_row('upgrade', '플랜 업그레이드', _open_upgrade)
+        add_row('profile', '프로필 관리', _open_profile)
+        # Show action text based on current theme: suggest switching to the opposite mode
+        theme_row_label = '라이트 모드' if self.dark_mode else '다크 모드'
+        add_row('light', theme_row_label, handler=None, checkable=True, checked=self.dark_mode)
+        add_row('settings', '설정', self._show_settings)
+
+        # spacer + logout (use add_row so logout has an icon)
+        layout.addStretch()
+        add_row('logout', '로그아웃', lambda: (self._account_logout()), checkable=False)
+
+        # Position the popup under the profile button
+        anchor = btn.mapTo(self.drawer_panel, btn.rect().bottomLeft())
+        popup.adjustSize()
+        pw = popup.width() or 220
+        ph = popup.height()
+        x = max(8, anchor.x())
+        # Prefer placing popup above the bottom edge so it doesn't overflow
+        y = min(self.drawer_panel.height() - ph - 8, anchor.y())
+        popup.setGeometry(x, y, pw, ph)
+        popup.show()
+        popup.raise_()
+        self._drawer_popup = popup
+
+    def _show_account_popup(self) -> None:
+        """Compatibility shim: show the profile menu (redirects to _show_profile_menu)."""
+        self._show_profile_menu()
     def _show_error_dialog(self, message: str) -> None:
         """Show elegant error dialog."""
         error_content = f"""
@@ -1296,10 +3351,43 @@ class MainWindow(QMainWindow):
         self.dark_mode = checked
         self._apply_styles()
         self._refresh_icons()
+        # If the profile popup is visible, refresh it so styles update (avoid leaving stale sizes)
+        try:
+            if getattr(self, "_drawer_popup", None) and self._drawer_popup.isVisible():
+                # Hide then schedule a re-show so the popup is rebuilt with the new styles
+                self._hide_drawer_popup()
+                QTimer.singleShot(80, self._show_profile_menu)
+        except Exception:
+            pass
 
     def _set_theme_glyph(self, active: bool) -> None:
-        """Set theme toggle icon."""
+        """Set theme toggle icon.
+
+        Prefer explicit themed assets when available:
+        - In light mode (active=False): show `moon-light.svg`
+        - In dark mode (active=True): show `light-dark.svg`
+        Falls back to icon-key resolver when explicit assets are missing.
+        """
         self.theme_btn.setText("[o]")
+        try:
+            assets_dir = Path(__file__).resolve().parents[1] / "public" / "img"
+            if active:
+                # Dark mode active -> show the 'light-dark' icon to indicate switching to light
+                explicit = assets_dir / "light-dark.svg"
+                if explicit.exists():
+                    self.theme_btn.setIcon(QIcon(str(explicit)))
+                    self.theme_btn.setIconSize(QSize(32, 32))
+                    return
+            else:
+                # Light mode active -> show the 'moon-light' icon to indicate switching to dark
+                explicit = assets_dir / "moon-light.svg"
+                if explicit.exists():
+                    self.theme_btn.setIcon(QIcon(str(explicit)))
+                    self.theme_btn.setIconSize(QSize(32, 32))
+                    return
+        except Exception:
+            pass
+        # Fallback to existing themed resolver
         if active:
             self._apply_button_icon(self.theme_btn, "light", "[O]", QSize(32, 32))
         else:
@@ -1317,7 +3405,8 @@ class MainWindow(QMainWindow):
 <style>
   .functions {{ margin-top: 12px; }}
   .func-item {{ display: flex; flex-direction: column; gap: 2px; margin-bottom: 10px; }}
-  .func-item code {{ background: #f3f4f6; color: #111827; padding: 6px 8px; border-radius: 8px; display: inline-block; }}
+  .func-item code {{ background: #f3f4f6; color: #000000; padding: 6px 8px; border-radius: 8px; display: inline-block; }}
+
   .dark-mode .func-item code {{ background: #1f2937; color: #e5e7eb; }}
   .func-item small {{ color: #666; }}
   .dark-mode .func-item small {{ color: #9ca3af; }}
@@ -1417,9 +3506,9 @@ class MainWindow(QMainWindow):
     .section { margin-bottom: 16px; }
     .section-title { font-weight: 700; margin-bottom: 6px; }
     .codes { display: block; }
-    .codes code { display: block; background: #f3f4f6; color: #111827; padding: 6px 8px; border-radius: 8px; margin-bottom: 6px; }
+    .codes code { display: block; background: #f3f4f6; color: #000000; padding: 6px 8px; border-radius: 8px; margin-bottom: 6px; }
     .dark-mode .codes code { background: #1f2937; color: #e5e7eb; }
-    .codes.inline code { display: inline-block; margin-right: 8px; margin-bottom: 6px; background: transparent; color: #111827; padding: 0; border-radius: 0; }
+    .codes.inline code { display: inline-block; margin-right: 8px; margin-bottom: 6px; background: transparent; color: #000000; padding: 0; border-radius: 0; }
     .dark-mode .codes.inline code { background: #1f2937; color: #e5e7eb; }
 </style>
 
@@ -1800,11 +3889,12 @@ class MainWindow(QMainWindow):
         dialog.setModal(True)
         
         # Set dialog background color
+        # Always use a pure white dialog background to match app's light theme
         dialog.setStyleSheet("""
             QDialog {
-                background-color: %s;
+                background-color: #ffffff;
             }
-        """ % ("#000000" if self.dark_mode else "#ffffff"))
+        """)
         
         # Create main layout
         main_layout = QVBoxLayout(dialog)
@@ -1950,7 +4040,8 @@ class MainWindow(QMainWindow):
         
         self.run_button.setEnabled(False)
         self.ai_generate_button.setEnabled(False)
-        self.ai_optimize_button.setEnabled(False)
+        if hasattr(self, "ai_optimize_button"):
+            self.ai_optimize_button.setEnabled(False)
         
         # Get available functions context
         context = """
@@ -2037,7 +4128,8 @@ class MainWindow(QMainWindow):
         self._show_error_dialog(f"스크립트 생성 중 오류가 발생했습니다.\n\n{error_msg}")
         self.run_button.setEnabled(True)
         self.ai_generate_button.setEnabled(True)
-        self.ai_optimize_button.setEnabled(True)
+        if hasattr(self, "ai_optimize_button"):
+            self.ai_optimize_button.setEnabled(True)
 
     def _on_ai_thought(self, msg: str) -> None:
         """Handle AI thought updates on the UI thread with animated progress."""
@@ -2052,7 +4144,8 @@ class MainWindow(QMainWindow):
         
         self.run_button.setEnabled(False)
         self.ai_generate_button.setEnabled(False)
-        self.ai_optimize_button.setEnabled(False)
+        if hasattr(self, "ai_optimize_button"):
+            self.ai_optimize_button.setEnabled(False)
         
         current_script = self.script_edit.toPlainText()
         
@@ -2121,7 +4214,8 @@ class MainWindow(QMainWindow):
                 self.script_edit.setPlainText(code)
             self.run_button.setEnabled(True)
             self.ai_generate_button.setEnabled(True)
-            self.ai_optimize_button.setEnabled(True)
+            if hasattr(self, "ai_optimize_button"):
+                self.ai_optimize_button.setEnabled(True)
         
         QTimer.singleShot(600, finish_animation)
     
@@ -2132,10 +4226,61 @@ class MainWindow(QMainWindow):
         self._show_error_dialog(f"스크립트 최적화 중 오류가 발생했습니다.\n\n{error_msg}")
         self.run_button.setEnabled(True)
         self.ai_generate_button.setEnabled(True)
-        self.ai_optimize_button.setEnabled(True)
+        if hasattr(self, "ai_optimize_button"):
+            self.ai_optimize_button.setEnabled(True)
 
     def _show_backup_menu(self) -> None:
-        """Show backup menu with options."""
+        """Show backup menu with options in-drawer (avoid opening separate windows)."""
+        # If the drawer panel is present, show an in-drawer popup anchored to the backup anchor
+        anchor_btn = getattr(self, "backup_icon_btn", None) or getattr(self, "drawer_profile_btn", None)
+        if hasattr(self, "drawer_panel") and anchor_btn and getattr(self, "drawer_panel"):
+            # Toggle existing popup
+            if self._drawer_popup and self._drawer_popup.isVisible():
+                self._hide_drawer_popup()
+                return
+
+            popup = QFrame(self.drawer_panel)
+            popup.setObjectName("drawer-popup")
+            popup.setFrameShape(QFrame.Shape.StyledPanel)
+            popup.setStyleSheet("background:#ffffff; border:1px solid #e6e7eb; border-radius:8px;")
+            layout = QVBoxLayout(popup)
+            layout.setContentsMargins(8, 8, 8, 8)
+            layout.setSpacing(6)
+
+            def add_action(text: str, handler):
+                b = QPushButton(text)
+                b.setObjectName("drawer-popup-action")
+                b.setCursor(Qt.CursorShape.PointingHandCursor)
+                b.setFlat(True)
+                b.clicked.connect(lambda checked=False, h=handler: (h(), self._hide_drawer_popup()))
+                layout.addWidget(b)
+
+            add_action("💾 현재 스크립트 백업", self._backup_current_script)
+            add_action("📦 세션 백업 (스크립트 + 출력)", self._backup_session)
+            sep = QFrame()
+            sep.setFrameShape(QFrame.Shape.HLine)
+            layout.addWidget(sep)
+            add_action("📄 스크립트 복원...", self._restore_script_dialog)
+            add_action("🔄 세션 복원...", self._restore_session_dialog)
+            sep2 = QFrame()
+            sep2.setFrameShape(QFrame.Shape.HLine)
+            layout.addWidget(sep2)
+            add_action("ℹ️  백업 정보 보기", self._show_backup_info)
+
+            # Position the popup under the anchor button
+            anchor = anchor_btn.mapTo(self.drawer_panel, anchor_btn.rect().bottomLeft())
+            popup.adjustSize()
+            pw = popup.width() or 220
+            ph = popup.height()
+            x = max(8, anchor.x())
+            y = min(self.drawer_panel.height() - ph - 8, anchor.y())
+            popup.setGeometry(x, y, pw, ph)
+            popup.show()
+            popup.raise_()
+            self._drawer_popup = popup
+            return
+
+        # Fallback: use menu if no drawer panel present (legacy behavior)
         menu = QMenu(self)
         menu.setMinimumWidth(250)
         
@@ -2229,8 +4374,21 @@ class MainWindow(QMainWindow):
         view_backups_action = menu.addAction("ℹ️  백업 정보 보기")
         view_backups_action.triggered.connect(self._show_backup_info)
         
-        # Show menu at button position
-        menu.exec(self.backup_icon_btn.mapToGlobal(self.backup_icon_btn.rect().bottomLeft()))
+        # Show menu at button position (fallback to profile button or cursor if backup button missing)
+        anchor_btn = getattr(self, "backup_icon_btn", None) or getattr(self, "drawer_profile_btn", None)
+        try:
+            if anchor_btn is not None:
+                menu.exec(anchor_btn.mapToGlobal(anchor_btn.rect().bottomLeft()))
+            else:
+                from PySide6.QtGui import QCursor
+                menu.exec(QCursor.pos())
+        except Exception:
+            try:
+                from PySide6.QtGui import QCursor
+                menu.exec(QCursor.pos())
+            except Exception:
+                # Last-resort: show in the center of the main window
+                menu.exec(self.mapToGlobal(self.rect().center()))
     
     def _backup_current_script(self) -> None:
         """Create a backup of the current script."""
@@ -2734,6 +4892,157 @@ class MainWindow(QMainWindow):
             # Silently fail - this is a background detection feature
             print(f"[HWP Detection] Error: {e}")
 
+    def _new_chat(self) -> None:
+        """Create and switch to a new chat, clearing UI and persisting state."""
+        try:
+            self._snapshot_current_chat()
+            new_id = str(uuid.uuid4())
+            now = time.time()
+            self._chats.insert(
+                0,
+                {
+                    "id": new_id,
+                    "title": "New chat",
+                    "log": "",
+                    "script": DEFAULT_SCRIPT.strip(),
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            )
+            # Activate the new chat so UI updates consistently and the drawer closes via _activate_chat
+            self._activate_chat(new_id)
+            # Ensure editor is focused and set to default script
+            try:
+                if hasattr(self, "script_edit"):
+                    self.script_edit.setPlainText(DEFAULT_SCRIPT.strip())
+                    self.script_edit.setFocus()
+                    self._animate_focus(self.script_edit)
+            except Exception:
+                pass
+            # Persist and update layout
+            self._schedule_persist()
+            self._update_composer_height()
+        except Exception:
+            pass
+
+    def _open_chat_search(self) -> None:
+        """Custom search dialog: large input area with mic, Cancel and OK buttons."""
+        try:
+            dlg = QDialog(self)
+            dlg.setWindowTitle("채팅 검색")
+            dlg.setModal(True)
+            # Make dialog width follow main content width (leave small margins) and reduce height
+            try:
+                central = self.centralWidget()
+                available_w = central.width() if central is not None else self.width()
+                dlg_w = max(420, available_w - 40)
+            except Exception:
+                dlg_w = 520
+            dlg.setMinimumHeight(260)
+            dlg.setFixedWidth(dlg_w)
+
+            # Center dialog horizontally over the main window and offset slightly from top
+            try:
+                parent_tl = self.mapToGlobal(self.rect().topLeft())
+                x = parent_tl.x() + max(8, (self.width() - dlg.width()) // 2)
+                y = parent_tl.y() + 72
+                dlg.move(x, y)
+            except Exception:
+                pass
+
+            # Theme aware background
+            if self.dark_mode:
+                dlg.setStyleSheet("QDialog { background: #000000; color: #e8e8e8; }")
+            else:
+                dlg.setStyleSheet("QDialog { background: #ffffff; color: #0f1724; }")
+
+            v = QVBoxLayout(dlg)
+            v.setContentsMargins(24, 20, 24, 18)
+            v.setSpacing(12)
+
+            # Heading
+            heading = QLabel("채팅 제목을 검색하세요")
+            heading.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            try:
+                heading.setStyleSheet("font-size:20px; font-weight:700;")
+            except Exception:
+                pass
+            v.addWidget(heading)
+
+            # Smaller rounded input area (QTextEdit) inside a frame
+            box = QFrame()
+            box.setObjectName("search-box")
+            box_lyt = QVBoxLayout(box)
+            box_lyt.setContentsMargins(12, 12, 12, 12)
+            box_lyt.setSpacing(8)
+
+            text_edit = QTextEdit()
+            text_edit.setObjectName("search-editor")
+            text_edit.setPlaceholderText("여기에 입력하세요")
+            # Reduce input height and limit its width relative to dialog width
+            text_edit.setMinimumHeight(80)
+            text_edit.setMaximumHeight(140)
+            text_edit.setAcceptRichText(False)
+            # Limit the input width so it appears narrower within the dialog
+            try:
+                # Make the input fill most of the dialog width for a more comfortable input area
+                min_edit_w = int(dlg.width() * 0.75)
+                max_edit_w = int(dlg.width() * 0.95)
+                text_edit.setMinimumWidth(min_edit_w)
+                text_edit.setMaximumWidth(max_edit_w)
+                text_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            except Exception:
+                pass
+            # Light theme styling for the input area
+            if self.dark_mode:
+                text_edit.setStyleSheet("QTextEdit { background: #0f0f0f; border: 1px solid #2a2a2a; border-radius: 12px; color: #e8e8e8; padding: 12px; }")
+            else:
+                text_edit.setStyleSheet("QTextEdit { background: #f6f7f9; border: 1px solid #e5e7eb; border-radius: 12px; color: #0f1724; padding: 12px; }")
+            box_lyt.addWidget(text_edit, 0, Qt.AlignmentFlag.AlignHCenter)
+
+            # Bottom row: buttons right
+            bottom = QWidget()
+            b_lyt = QHBoxLayout(bottom)
+            b_lyt.setContentsMargins(0, 0, 0, 0)
+            b_lyt.setSpacing(8)
+
+            b_lyt.addStretch()
+
+            cancel_btn = QPushButton("취소")
+            cancel_btn.clicked.connect(dlg.reject)
+            try:
+                cancel_btn.setStyleSheet("background: transparent; border: none; font-weight:700; font-size:15px; padding: 8px 16px;")
+            except Exception:
+                pass
+            b_lyt.addWidget(cancel_btn, 0, Qt.AlignmentFlag.AlignRight)
+
+            ok_btn = QPushButton("확인")
+            ok_btn.setFixedSize(84, 40)
+            try:
+                ok_btn.setStyleSheet("background: #5377f6; color: white; border-radius: 10px; font-weight:700; font-size:15px;")
+            except Exception:
+                pass
+            b_lyt.addWidget(ok_btn, 0, Qt.AlignmentFlag.AlignRight)
+
+            box_lyt.addWidget(bottom)
+            v.addWidget(box)
+
+            def on_ok():
+                try:
+                    text = text_edit.toPlainText().strip()
+                    if text:
+                        self._chat_filter = text
+                        self._render_chat_list()
+                    dlg.accept()
+                except Exception:
+                    dlg.reject()
+
+            ok_btn.clicked.connect(on_ok)
+
+            dlg.exec()
+        except Exception:
+            pass
+
 
 def run_app() -> None:
     existing_app = QApplication.instance()
@@ -2749,38 +5058,11 @@ def run_app() -> None:
 
 
 def _apply_app_font(app: QApplication) -> None:
-    font_db = QFontDatabase()
-    if "Pretendard" not in font_db.families():
-        font_path = (
-            Path(__file__).resolve().parents[1] / "resources" / "fonts" / "PretendardVariable.ttf"
-        )
-        if font_path.exists():
-            QFontDatabase.addApplicationFont(str(font_path))
-
-    base_font = QFont("Pretendard")
-    if base_font.family() != "Pretendard":
-        base_font = app.font()
-        base_font.setFamily("Pretendard")
-    base_font.setPointSize(11)
-    app.setFont(base_font)
+    """Delegate font loading to gui.design.apply_app_font."""
+    design.apply_app_font(app)
 
 
 def _ensure_material_icon_font() -> str:
-    font_db = QFontDatabase()
-    target_name = "Material Icons Round"
-    if target_name in font_db.families():
-        return target_name
-
-    font_path = (
-        Path(__file__).resolve().parents[1] / "resources" / "fonts" / "MaterialSymbolsRounded.ttf"
-    )
-    if font_path.exists():
-        font_id = QFontDatabase.addApplicationFont(str(font_path))
-        families = QFontDatabase.applicationFontFamilies(font_id)
-        if families:
-            return families[0]
-    app = QApplication.instance()
-    if isinstance(app, QApplication):
-        return app.font().family()
-    return "Arial"
+    """Delegate material icon font resolution to gui.design.ensure_material_icon_font."""
+    return design.ensure_material_icon_font()
 

@@ -1,6 +1,6 @@
 /* Common Dialog Styles */
-body { 
-    font-family: 'Pretendard', -apple-system, sans-serif;
+body {
+    font-family: "Pretendard", -apple-system, sans-serif;
     color: #2c3e50;
     line-height: 1.7;
     padding: 20px;
@@ -11,7 +11,7 @@ body.dark-mode {
     color: #e8e8e8;
 }
 
-h2 { 
+h2 {
     color: #5377f6;
     font-size: 24px;
     font-weight: 600;
@@ -61,7 +61,7 @@ body.dark-mode .error-container {
     border-radius: 8px;
     padding: 16px;
     margin-top: 16px;
-    font-family: 'Monaco', 'Menlo', monospace;
+    font-family: "Monaco", "Menlo", monospace;
     font-size: 13px;
     color: #842029;
     line-height: 1.6;
@@ -127,13 +127,13 @@ body.dark-mode .info-message {
     padding: 16px 20px;
     margin: 16px 0;
     border-radius: 8px;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
 }
 
 body.dark-mode .step {
     background: linear-gradient(135deg, #2a2a2a 0%, #1a1a1a 100%);
     border-left-color: #5377f6;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 
 .step-num {
@@ -189,7 +189,7 @@ code {
     background: #ffffff;
     padding: 4px 8px;
     border-radius: 6px;
-    font-family: 'Monaco', 'Menlo', monospace;
+    font-family: "Monaco", "Menlo", monospace;
     font-size: 13px;
     color: #d63384;
     border: 1px solid #f0f0f0;
@@ -351,9 +351,10 @@ body.dark-mode .info-box {
 }
 
 /* OK Button Styling */
+
 QPushButton {
     background-color: #e5e7eb;
-    color: #111827;
+    color: #000000;
     border: 1px solid #d1d5db;
     border-radius: 8px;
     padding: 10px 32px;
@@ -362,11 +363,16 @@ QPushButton {
     min-width: 100px;
 }
 
+body.dark-mode QPushButton {
+    background-color: #374151;
+    color: #ffffff;
+    border: 1px solid #4a4a4a;
+}
+
 QPushButton:hover {
     background-color: #dbe1e6;
 }
 
 QPushButton:pressed {
     background-color: #cfd6dc;
-}
 }

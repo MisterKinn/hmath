@@ -5,15 +5,6 @@ QWidget {
     font-size: 14px;
 }
 
-#main-area {
-    background-color: #ffffff;
-}
-
-#sidebar {
-    background-color: #f7f7f8;
-    border-left: 1px solid #d1d5db;
-}
-
 QToolButton#pin-button {
     border: none;
     color: #999;
@@ -66,14 +57,14 @@ QToolButton#pin-button:checked {
 }
 
 QPushButton#help-button {
-    background-color: #f3f6ff;
-    border: 1px solid #d6ddf7;
-    border-radius: 10px;
+    background-color: #ffffff;
+    border: 1px solid #e6e7eb;
+    border-radius: 14px;
     padding: 8px 14px;
-    color: #1f2a44;
+    color: #0f1724;
     font-size: 13px;
-    font-weight: 600;
-    qproperty-iconSize: 20px 20px;
+    font-weight: 700;
+    qproperty-iconSize: 18px 18px;
 }
 
 QPushButton#help-button:hover {
@@ -91,9 +82,11 @@ QPushButton#help-button:pressed {
 }
 
 #script-input-container {
-    background-color: #f3f4f6;
-    border: 1px solid #d1d5db;
-    border-radius: 12px;
+    background-color: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 22px;
+    padding: 16px;
+    box-shadow: 0 6px 18px rgba(0,0,0,0.06);
 }
 
 QTextEdit#script-editor {
@@ -137,12 +130,12 @@ QPushButton#primary-action:disabled {
 #log-output {
     background-color: transparent;
     border: 1px solid #d1d5db;
-    border-radius: 8px;
-    padding: 12px;
+    border-radius: 12px;
+    padding: 14px;
     color: #000000 !important;
     font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
     font-size: 12px;
-    line-height: 2.5;
+    line-height: 1.6;
 }
 
 #log-output:focus {
@@ -186,6 +179,188 @@ QPushButton#help-button {
     color: #5377f6;
     font-size: 24px;
 }
+
+/* Hero heading and composer pill tweaks */
+QLabel#hero-prompt {
+    font-size: 36px;
+    font-weight: 800;
+    color: #000000;
+    margin-top: 8px;
+}
+
+/* Drawer / Sidebar styles to match FormuLite sidebar */
+QFrame#drawer { background-color: transparent; border-left: none; }
+QWidget#sidebar-content { border-right: 1px solid #e6e7eb; padding-right: 8px; }
+QWidget#drawer-header { padding-bottom: 6px; }
+
+/* Make the top navbar transparent so content shows behind it */
+QWidget#header-area { background-color: transparent; }
+QLabel#drawer-title { font-size: 20px; font-weight: 800; color: #0f1724; }
+QToolButton#drawer-close-btn { color: #0f1724; font-size: 20px; border: none; background: transparent; }
+
+/* Top-left hamburger toggle (icon-only, no background) */
+QToolButton#drawer-toggle {
+    background-color: transparent;
+    color: #0f1724;
+    border: none;
+    border-radius: 0;
+    min-width: 36px;
+    min-height: 36px;
+    /* add a small left/top padding so themed openbtn icons sit correctly */
+    padding: 4px 0 0 6px;
+}
+QToolButton#drawer-toggle:hover {
+    background-color: transparent;
+}
+
+/* Custom scroll bar styling (light theme) */
+QScrollBar:vertical {
+    background: transparent;
+    width: 10px;
+    margin: 8px 0 8px 0;
+}
+QScrollBar::handle:vertical {
+    background: #cbd5e1; /* light gray handle */
+    min-height: 24px;
+    border-radius: 6px;
+}
+QScrollBar::handle:vertical:hover {
+    background: #94a3b8;
+}
+QScrollBar::add-line, QScrollBar::sub-line, QScrollBar::add-page, QScrollBar::sub-page {
+    background: none; border: none; height: 0px;
+}
+QScrollBar:horizontal {
+    background: transparent;
+    height: 10px;
+}
+QScrollBar::handle:horizontal {
+    background: #cbd5e1;
+    min-width: 24px;
+    border-radius: 6px;
+}
+
+QWidget#drawer-overlay { background: rgba(0,0,0,0.14); }
+
+/* Compact chat item padding to match reference */
+QPushButton#drawer-chat-item { padding: 8px 8px; min-height: 44px; }
+/* Remove wrapper border; spacing provides separation between rows */
+QWidget#drawer-chat-list QWidget#drawer-chat-item-wrap { padding: 0px 2px; }
+QToolButton#drawer-chat-delete {
+    background-color: transparent; /* keep clean baseline */
+    border-radius: 6px;
+    min-width: 28px;
+    min-height: 28px;
+    color: #bfc7cf;
+    border: none;
+    visibility: hidden;
+    font-size: 13px;
+}
+QWidget#drawer-chat-list QWidget#drawer-chat-item-wrap:hover QToolButton#drawer-chat-delete { visibility: visible; color: #9ca3af; }
+QToolButton#drawer-chat-delete:hover { background-color: #f3f4f6; color: #ef4444; border-radius: 6px; }
+
+/* Edit button: use edit.png asset and keep hidden until row hover */
+QToolButton#drawer-chat-edit {
+    background-color: transparent;
+    border-radius: 6px;
+    min-width: 28px;
+    min-height: 28px;
+    color: #bfc7cf;
+    border: none;
+    visibility: hidden;
+    font-size: 13px;
+}
+QWidget#drawer-chat-list QWidget#drawer-chat-item-wrap:hover QToolButton#drawer-chat-edit { visibility: visible; color: #9ca3af; }
+QToolButton#drawer-chat-edit:hover { background-color: #f3f4f6; color: #0f1724; border-radius: 6px; }
+
+QWidget#drawer-profile-wrap { border-top: 1px solid #e9ecef; padding-top: 12px; }
+QFrame#drawer-divider { border: none; background: transparent; height: 1px; }
+QLabel#drawer-avatar { background-color: #2b7bf6; color: #ffffff; border-radius: 20px; font-weight: 800; font-size: 16px; }
+
+QPushButton#drawer-action {
+    background-color: transparent;
+    border: none;
+    text-align: left;
+    padding: 12px 10px;
+    font-size: 16px;
+    font-weight: 800;
+    color: #0f1724;
+    border-radius: 10px;
+    min-height: 48px;
+}
+QPushButton#drawer-action:hover { background-color: #f4f6f8; }
+
+QLabel#drawer-section-title { color: #9ca3af; font-weight: 700; margin-left: 6px; margin-top: 6px; }
+
+/* Chat list items - compact */
+QWidget#drawer-chat-list QWidget#drawer-chat-item-wrap { padding: 0px 2px; }
+QPushButton#drawer-chat-item {
+    background: transparent;
+    border: none;
+    text-align: left;
+    padding: 8px 8px;
+    font-size: 14px;
+    font-weight: 700;
+    color: #0f1724;
+    border-radius: 10px;
+}
+QPushButton#drawer-chat-item[active="true"] {
+    background-color: #eef0f2;
+    border-radius: 12px;
+    padding-left: 12px;
+}
+
+/* Hover state for chat rows: highlight using wrapper background so corners stay rounded */
+QWidget#drawer-chat-list QWidget#drawer-chat-item-wrap:hover QPushButton#drawer-chat-item,
+QPushButton#drawer-chat-item:hover {
+    background-color: transparent;
+    /* keep rounded pill shape on wrapper */
+    border-radius: 12px;
+}
+
+QToolButton#drawer-chat-delete {
+    background-color: #f3f4f6;
+    border-radius: 6px;
+    min-width: 28px;
+    min-height: 28px;
+    color: #9ca3af;
+    visibility: hidden;
+    font-size: 13px;
+}
+QWidget#drawer-chat-list QWidget#drawer-chat-item-wrap:hover QToolButton#drawer-chat-delete { visibility: visible; }
+
+/* Profile area */
+QLabel#drawer-avatar {
+    background-color: #2b7bf6;
+    color: #ffffff;
+    border-radius: 20px;
+    font-weight: 800;
+    font-size: 16px;
+    qproperty-alignment: 'AlignCenter';
+}
+QWidget#drawer-profile-wrap { padding-top: 6px; padding-bottom: 6px; }
+QWidget#drawer-profile-wrap:hover { background-color: #f4f6f8; border-radius: 8px; }
+
+/* Profile popup rows: remove boxed button appearance and align content */
+QFrame#profile-popup { background: #ffffff; border: none; border-radius: 10px; }
+QFrame#profile-popup QPushButton#profile-popup-action { background: transparent; border: none; text-align: left; padding: 6px 8px; font-weight: 700; font-size: 15px; color: #0f1724; }
+QFrame#profile-popup QLabel { color: #0f1724; }
+QWidget#profile-popup-row { background: transparent; border: none; }
+QFrame#profile-popup { padding: 8px; }
+
+QFrame#composer-pill, QWidget#script-input-container {
+    background-color: #f4f4f4;
+    border: 1px solid #e5e7eb;
+    border-radius: 24px;
+}
+
+QPushButton#composer-send {
+    background-color: #5377f6;
+    border-radius: 40px;
+    border: none;
+    font-weight: 700;
+    color: #ffffff;
+}QPushButton#composer-send:hover { background-color: #3e5fc7; }
 
 /* Scrollbar styling for light theme */
 QScrollBar:vertical {
