@@ -137,7 +137,7 @@ def apply_help_button_style(window) -> None:
         color: {text_color};
         border: 1px solid {hwp_border};
         border-radius: 12px;
-        padding: 7px 12px;
+        padding: 6px 12px;
         font-weight: 700;
         font-size: 13px;
         text-align: center;
