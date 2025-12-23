@@ -3878,22 +3878,22 @@ class MainWindow(QMainWindow):
     <h3>주요 기능</h3>
     
     <div class="func-item">
-        <img src='{save_icon}' style='width:18px; height:18px; vertical-align:middle; padding-right:12px;' />스크립트 저장
+        <img src='{save_icon}' width='18' height='18' style='vertical-align:middle; padding-right:12px;' />스크립트 저장
         <small style="padding-left: 5px; margin-left: 5px;">현재 에디터의 코드를 Python 파일로 저장</small>
     </div>
     
     <div class="func-item">
-        <img src='{load_icon}' style='width:18px; height:18px; vertical-align:middle; padding-right:12px;' />스크립트 불러오기
+        <img src='{load_icon}' width='18' height='18' style='vertical-align:middle; padding-right:12px;' />스크립트 불러오기
         <small style="padding-left: 5px; margin-left: 5px;" >저장된 코드 파일을 에디터에 불러오기</small>
     </div>
     
     <div class="func-item">
-        <img src='{light_icon}' style='width:18px; height:18px; vertical-align:middle; padding-right:12px;' />다크 모드
+        <img src='{light_icon}' width='18' height='18' style='vertical-align:middle; padding-right:12px;' />다크 모드
         <small style="padding-left: 5px; margin-left: 5px;">밝은 테마와 어두운 테마 전환</small>
     </div>
     
     <div class="func-item">
-        <img src='{settings_icon}' style='width:18px; height:18px; vertical-align:middle; padding-right:12px;' />설정
+        <img src='{settings_icon}' width='18' height='18' style='vertical-align:middle; padding-right:12px;' />설정
         <small style="padding-left: 5px; margin-left: 5px;">앱 정보 및 단축키 확인</small>
     </div>
 </div>
@@ -4176,26 +4176,26 @@ class MainWindow(QMainWindow):
     </div>
 
     <div class="setting-section">
-    <div class="setting-title">애플리케이션 정보</div>
+    <div class="setting-title"><br>애플리케이션 정보<br></div>
     
     <div class="setting-item">
         <span class="setting-label">버전</span>
-        <span class="setting-value">1.0.0</span>
+        <span class="setting-value">1.0.0<br></span>
     </div>
     
     <div class="setting-item">
         <span class="setting-label">Python 버전</span>
-        <span class="setting-value">3.9+</span>
+        <span class="setting-value">3.9+<br></span>
     </div>
     
     <div class="setting-item">
         <span class="setting-label">플랫폼</span>
-        <span class="setting-value">Windows, macOS, Linux</span>
+        <span class="setting-value">Windows, macOS, Linux<br></span>
     </div>
 </div>
 
 <div class="info-box">
-    <strong>참고:</strong> 한글 자동화는 Windows 환경에서만 작동합니다. macOS/Linux에서는 스크립트 편집 기능만 사용 가능합니다.
+    <strong>참고:</strong>한글 자동화는 Windows 환경에서만 작동합니다. macOS/Linux에서는 스크립트 편집 기능만 사용 가능합니다.
 </div>
 """
         msg = _create_styled_dialog(

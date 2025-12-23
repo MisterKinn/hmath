@@ -185,6 +185,15 @@ body.dark-mode .func-item {
     border-bottom: none;
 }
 
+/* Guard: keep rich-text <img> icons from rendering huge (Qt can ignore CSS sizing for SVG). */
+.functions .func-item img {
+    width: 18px !important;
+    height: 18px !important;
+    max-width: 18px !important;
+    max-height: 18px !important;
+    vertical-align: middle;
+}
+
 code {
     background: #ffffff;
     padding: 4px 8px;
