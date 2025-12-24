@@ -1003,7 +1003,6 @@ class MainWindow(QMainWindow):
         header_layout.setSpacing(20)
         
         header_layout.addWidget(self._build_header())
-        header_layout.addWidget(self._build_help_buttons())
         header_layout.addWidget(self._build_templates(), 0)  # No stretch
         
         # Output area (conversation/chat display)
@@ -1013,7 +1012,26 @@ class MainWindow(QMainWindow):
         output_layout.setContentsMargins(40, 20, 40, 20)
         output_layout.setSpacing(16)
         
-        # Conversation-style output area
+        # ChatGPT-style transcript (shown above the input when the user asks AI)
+        self.chat_scroll = QScrollArea()
+        self.chat_scroll.setObjectName("chat-scroll")
+        self.chat_scroll.setWidgetResizable(True)
+        self.chat_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.chat_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.chat_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.chat_scroll.setStyleSheet("QScrollArea{ background: transparent; border: none; }")
+
+        self.chat_transcript = QWidget()
+        self.chat_transcript.setObjectName("chat-transcript")
+        self.chat_transcript_layout = QVBoxLayout(self.chat_transcript)
+        self.chat_transcript_layout.setContentsMargins(0, 0, 0, 0)
+        self.chat_transcript_layout.setSpacing(10)
+        self.chat_transcript_layout.addStretch(1)
+        self.chat_scroll.setWidget(self.chat_transcript)
+        output_layout.addWidget(self.chat_scroll, 1)
+
+        # Existing conversation-style output area (used by script logs/progress). Keep it for compatibility,
+        # but hide it by default so the visible UI resembles ChatGPT.
         self.log_output = QTextEdit()
         self.log_output.setObjectName("log-output")
         self.log_output.setReadOnly(True)
@@ -1021,14 +1039,16 @@ class MainWindow(QMainWindow):
         # Context menu for log output
         self.log_output.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.log_output.customContextMenuRequested.connect(self._show_log_context_menu)
-        output_layout.addWidget(self.log_output, 1)  # Take most space
+        self.log_output.hide()
+        output_layout.addWidget(self.log_output, 0)
         
         # Input area at bottom (fixed)
         input_area = QWidget()
         input_area.setObjectName("input-container")
         input_layout = QVBoxLayout(input_area)
-        input_layout.setContentsMargins(24, 0, 24, 24)
-        input_layout.setSpacing(16)
+        # Keep the composer compact (shorter input form height).
+        input_layout.setContentsMargins(20, 0, 20, 16)
+        input_layout.setSpacing(12)
         
         # Image preview area (initially hidden)
         self.image_preview_container = QWidget()
@@ -1044,16 +1064,17 @@ class MainWindow(QMainWindow):
         script_container = QWidget()
         script_container.setObjectName("script-input-container")
         script_layout = QVBoxLayout(script_container)
-        script_layout.setContentsMargins(20, 20, 20, 20)
-        script_layout.setSpacing(16)
+        script_layout.setContentsMargins(16, 16, 16, 16)
+        script_layout.setSpacing(12)
         
         # Script editor
         self.script_edit = QTextEdit()
         self.script_edit.setObjectName("script-editor")
         self.script_edit.setPlaceholderText("코드를 작성하거나 붙여넣으세요")
         self.script_edit.setPlainText(DEFAULT_SCRIPT.strip())
-        self.script_edit.setMaximumHeight(320)
-        self.script_edit.setMinimumHeight(200)
+        # Smaller editor height to reduce overall input form height.
+        self.script_edit.setMaximumHeight(220)
+        self.script_edit.setMinimumHeight(140)
         # Custom context menu in Korean
         self.script_edit.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.script_edit.customContextMenuRequested.connect(self._show_editor_context_menu)
@@ -1194,8 +1215,9 @@ class MainWindow(QMainWindow):
         self.center_prompt = hero_prompt
         hero_layout.addWidget(self.center_prompt, alignment=Qt.AlignmentFlag.AlignCenter)
         hero_layout.addSpacing(18)
-        hero_layout.addWidget(self._build_help_buttons(), alignment=Qt.AlignmentFlag.AlignHCenter)
         hero_layout.addStretch(1)
+        # Store hero area so we can hide it when chat transcript becomes active.
+        self.hero_area = hero_area
         main_column.addWidget(hero_area, 1)
 
         # Top-left hamburger (drawer toggle)
@@ -1320,6 +1342,23 @@ class MainWindow(QMainWindow):
 
         top_bar_layout.addStretch()
         main_column.insertWidget(0, top_bar, 0)
+        
+        # Help buttons fixed below model selection
+        help_buttons_container = QWidget()
+        help_buttons_container.setObjectName("help-buttons-fixed")
+        help_buttons_container.setStyleSheet("background-color: transparent;")
+        help_buttons_layout = QHBoxLayout(help_buttons_container)
+        help_buttons_layout.setContentsMargins(12, 16, 12, 0)
+        help_buttons_layout.setSpacing(0)
+        help_buttons_layout.addWidget(self._build_help_buttons(), alignment=Qt.AlignmentFlag.AlignCenter)
+        main_column.insertWidget(1, help_buttons_container, 0)
+
+        # Insert chat transcript area above the input. Hidden until first AI message.
+        try:
+            self.output_area.hide()
+        except Exception:
+            pass
+        main_column.insertWidget(3, self.output_area, 1)
 
         # Input pinned to bottom; height managed by _update_composer_height()
         main_column.addWidget(input_area, 0)
@@ -1338,6 +1377,13 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(main_area, 1)
         self.setCentralWidget(central)
+
+        # Chat transcript state
+        self._chat_widgets: list[tuple[str, QWidget, QLabel]] = []  # (role, row_widget, bubble_label)
+        self._thinking_widget: tuple[QWidget, QLabel] | None = None  # (row_widget, bubble_label)
+        self._thinking_timer: QTimer | None = None
+        self._thinking_dots = 0
+
 
     def _build_header(self) -> QWidget:
         frame = QFrame()
@@ -1738,10 +1784,10 @@ class MainWindow(QMainWindow):
         nb_lyt.setSpacing(2)
         name_lbl = QLabel(self.profile_display_name)
         name_lbl.setObjectName("drawer-user-name")
-        # Apply theme-aware typography: bold name, darker in light mode, light in dark mode
+        # Apply theme-aware typography: bold name, darker in light mode, white in dark mode
         try:
             if getattr(self, 'dark_mode', False):
-                name_lbl.setStyleSheet('font-weight:800; font-size:16px; color:#e8e8e8;')
+                name_lbl.setStyleSheet('font-weight:800; font-size:16px; color:#ffffff;')
             else:
                 name_lbl.setStyleSheet('font-weight:800; font-size:16px; color:#0f1724;')
         except Exception:
@@ -2117,6 +2163,11 @@ class MainWindow(QMainWindow):
             self._set_top_model_chevron()
         except Exception:
             pass
+        # Chat transcript bubbles should update on theme toggle
+        try:
+            self._refresh_chat_transcript_styles()
+        except Exception:
+            pass
         # Additional adaptive styling to match simplified layout
         try:
             # Make heading large and centered
@@ -2255,9 +2306,21 @@ class MainWindow(QMainWindow):
             try:
                 if hasattr(self, "script_container"):
                     if mobile:
-                        self.script_container.setStyleSheet("QWidget#script-input-container { background: #ffffff; border: 1px solid #e5e7eb; border-radius: 24px; padding: 20px; }")
+                        self.script_container.setStyleSheet("QWidget#script-input-container { background: #ffffff; border: 1px solid #e5e7eb; border-radius: 24px; padding: 14px; }")
                     else:
-                        self.script_container.setStyleSheet("QWidget#script-input-container { background: #f3f4f6; border: 1px solid #e5e7eb; border-radius: 20px; padding: 16px; }")
+                        self.script_container.setStyleSheet("QWidget#script-input-container { background: #f3f4f6; border: 1px solid #e5e7eb; border-radius: 20px; padding: 12px; }")
+            except Exception:
+                pass
+
+            # Editor height tweaks (keep composer compact)
+            try:
+                if hasattr(self, "script_edit") and isinstance(self.script_edit, QTextEdit):
+                    if mobile:
+                        self.script_edit.setMaximumHeight(190)
+                        self.script_edit.setMinimumHeight(120)
+                    else:
+                        self.script_edit.setMaximumHeight(220)
+                        self.script_edit.setMinimumHeight(140)
             except Exception:
                 pass
 
@@ -2743,6 +2806,10 @@ class MainWindow(QMainWindow):
         try:
             self._apply_top_model_text_style()
             self._set_top_model_chevron()
+        except Exception:
+            pass
+        try:
+            self._refresh_chat_transcript_styles()
         except Exception:
             pass
         # Drawer primary actions: swap between write/search light and dark variants on theme change.
@@ -3353,7 +3420,10 @@ class MainWindow(QMainWindow):
         nc_lyt.setContentsMargins(0, 0, 0, 0)
         nc_lyt.setSpacing(2)
         name_label = QLabel(self.profile_display_name)
-        name_label.setStyleSheet('font-weight:800; font-size:16px;')
+        # Explicitly set white color in dark mode
+        name_label.setStyleSheet('font-weight:800; font-size:16px; color:%s;' % (
+            '#ffffff' if self.dark_mode else '#0f1724'
+        ))
         handle_label = QLabel(f"@{(self.profile_handle or 'kinn')}" )
         handle_label.setStyleSheet('color:#9ca3af;')
         nc_lyt.addWidget(name_label)
@@ -4072,6 +4142,185 @@ class MainWindow(QMainWindow):
         
         self.log_output.setTextCursor(cursor)
 
+    def _ensure_chat_transcript_visible(self) -> None:
+        """Show the chat transcript area and hide the hero prompt area."""
+        try:
+            if getattr(self, "output_area", None):
+                self.output_area.show()
+        except Exception:
+            pass
+        try:
+            if getattr(self, "hero_area", None):
+                self.hero_area.hide()
+        except Exception:
+            pass
+
+    def _apply_chat_bubble_style(self, role: str, bubble: QLabel) -> None:
+        """Apply theme-aware styles to a chat bubble label."""
+        is_dark = getattr(self, "dark_mode", False)
+        if role == "user":
+            bg = "#5377f6"
+            fg = "#ffffff"
+            border = "transparent"
+        else:
+            bg = "#111111" if is_dark else "#f4f4f5"
+            fg = "#ffffff" if is_dark else "#0f1724"
+            border = "#1f2937" if is_dark else "#e5e7eb"
+
+        bubble.setStyleSheet(
+            f"""
+            QLabel {{
+                background-color: {bg};
+                color: {fg};
+                border: 1px solid {border};
+                border-radius: 16px;
+                padding: 10px 12px;
+                font-size: 14px;
+                line-height: 1.5;
+            }}
+            """
+        )
+
+    def _chat_add_message(self, role: str, text: str) -> None:
+        """Append a ChatGPT-style message bubble above the input."""
+        self._ensure_chat_transcript_visible()
+
+        # Remove the stretch spacer at the end, append, then add it back.
+        try:
+            if self.chat_transcript_layout.count() > 0:
+                last_item = self.chat_transcript_layout.itemAt(self.chat_transcript_layout.count() - 1)
+                if last_item and last_item.spacerItem():
+                    self.chat_transcript_layout.takeAt(self.chat_transcript_layout.count() - 1)
+        except Exception:
+            pass
+
+        row = QWidget()
+        row.setObjectName("chat-row")
+        row_lyt = QHBoxLayout(row)
+        row_lyt.setContentsMargins(0, 0, 0, 0)
+        row_lyt.setSpacing(0)
+
+        bubble = QLabel()
+        bubble.setObjectName("chat-bubble")
+        bubble.setWordWrap(True)
+        bubble.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        bubble.setTextFormat(Qt.TextFormat.RichText)
+        bubble.setMaximumWidth(520)
+
+        # Simple HTML escape + preserve newlines
+        safe = (
+            (text or "")
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace("\n", "<br/>")
+        )
+        bubble.setText(safe)
+        self._apply_chat_bubble_style(role, bubble)
+
+        if role == "user":
+            row_lyt.addStretch(1)
+            row_lyt.addWidget(bubble, 0, Qt.AlignmentFlag.AlignRight)
+        else:
+            row_lyt.addWidget(bubble, 0, Qt.AlignmentFlag.AlignLeft)
+            row_lyt.addStretch(1)
+
+        self.chat_transcript_layout.addWidget(row, 0)
+        self.chat_transcript_layout.addStretch(1)
+        self._chat_widgets.append((role, row, bubble))
+
+        # Scroll to bottom
+        try:
+            QTimer.singleShot(0, lambda: self.chat_scroll.verticalScrollBar().setValue(self.chat_scroll.verticalScrollBar().maximum()))
+        except Exception:
+            pass
+
+    def _refresh_chat_transcript_styles(self) -> None:
+        """Reapply theme-aware bubble styles (e.g. after theme toggle)."""
+        try:
+            for role, _row, bubble in getattr(self, "_chat_widgets", []):
+                self._apply_chat_bubble_style(role, bubble)
+        except Exception:
+            pass
+
+    def _show_thinking_animation(self) -> None:
+        """Show animated 'thinking...' indicator in chat."""
+        self._remove_thinking_animation()  # Remove any existing one first
+        self._ensure_chat_transcript_visible()
+
+        # Remove the stretch spacer at the end
+        try:
+            if self.chat_transcript_layout.count() > 0:
+                last_item = self.chat_transcript_layout.itemAt(self.chat_transcript_layout.count() - 1)
+                if last_item and last_item.spacerItem():
+                    self.chat_transcript_layout.takeAt(self.chat_transcript_layout.count() - 1)
+        except Exception:
+            pass
+
+        row = QWidget()
+        row.setObjectName("chat-row")
+        row_lyt = QHBoxLayout(row)
+        row_lyt.setContentsMargins(0, 0, 0, 0)
+        row_lyt.setSpacing(0)
+
+        bubble = QLabel()
+        bubble.setObjectName("chat-bubble-thinking")
+        bubble.setWordWrap(True)
+        bubble.setMaximumWidth(520)
+        bubble.setTextFormat(Qt.TextFormat.RichText)
+        bubble.setText("생각하는 중")
+        self._apply_chat_bubble_style("assistant", bubble)
+
+        row_lyt.addWidget(bubble, 0, Qt.AlignmentFlag.AlignLeft)
+        row_lyt.addStretch(1)
+
+        self.chat_transcript_layout.addWidget(row, 0)
+        self.chat_transcript_layout.addStretch(1)
+        self._thinking_widget = (row, bubble)
+
+        # Start animation timer
+        self._thinking_dots = 0
+        if self._thinking_timer is None:
+            self._thinking_timer = QTimer()
+            self._thinking_timer.timeout.connect(self._update_thinking_animation)
+        self._thinking_timer.start(400)  # Update every 400ms
+
+        # Scroll to bottom
+        try:
+            QTimer.singleShot(0, lambda: self.chat_scroll.verticalScrollBar().setValue(self.chat_scroll.verticalScrollBar().maximum()))
+        except Exception:
+            pass
+
+    def _update_thinking_animation(self) -> None:
+        """Update the thinking animation dots."""
+        if self._thinking_widget is None:
+            return
+        _, bubble = self._thinking_widget
+        self._thinking_dots = (self._thinking_dots + 1) % 4
+        dots = "." * self._thinking_dots
+        bubble.setText(f"생각하는 중{dots}")
+
+    def _remove_thinking_animation(self) -> None:
+        """Remove the thinking animation indicator."""
+        if self._thinking_timer is not None:
+            self._thinking_timer.stop()
+        if self._thinking_widget is not None:
+            row, _ = self._thinking_widget
+            try:
+                # Remove the stretch spacer at the end first
+                if self.chat_transcript_layout.count() > 0:
+                    last_item = self.chat_transcript_layout.itemAt(self.chat_transcript_layout.count() - 1)
+                    if last_item and last_item.spacerItem():
+                        self.chat_transcript_layout.takeAt(self.chat_transcript_layout.count() - 1)
+                # Remove the thinking widget
+                self.chat_transcript_layout.removeWidget(row)
+                row.deleteLater()
+                # Add stretch back
+                self.chat_transcript_layout.addStretch(1)
+            except Exception:
+                pass
+            self._thinking_widget = None
+
     def _update_progress_message(self, base_text: str) -> None:
         """Update progress message with fade animation on text change."""
         # If this is a new progress message (different text), trigger fade animation
@@ -4298,39 +4547,56 @@ class MainWindow(QMainWindow):
         dialog = QDialog(self)
         dialog.setWindowTitle(title)
         dialog.setModal(True)
+        dialog.setMinimumWidth(520)
         
-        # Set dialog background color
-        # Always use a pure white dialog background to match app's light theme
+        # Set dialog background color (theme-aware)
         dialog.setStyleSheet("""
             QDialog {
-                background-color: #ffffff;
+                background-color: %s;
             }
-        """)
+        """ % ("#1a1a1a" if self.dark_mode else "#ffffff"))
         
         # Create main layout
         main_layout = QVBoxLayout(dialog)
-        main_layout.setContentsMargins(20, 20, 20, 20)
-        main_layout.setSpacing(20)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
         
-        # Centered description label
+        # Banner section with prompt text (prominent dark banner in dark mode)
+        banner = QWidget()
+        banner.setObjectName("prompt-banner")
+        banner.setStyleSheet("""
+            QWidget#prompt-banner {
+                background-color: %s;
+                padding: 24px;
+            }
+        """ % (
+            "#000000" if self.dark_mode else "#f9fafb"
+        ))
+        banner_layout = QVBoxLayout(banner)
+        banner_layout.setContentsMargins(24, 20, 24, 20)
+        banner_layout.setSpacing(0)
+        
+        # Centered description label with better typography
         desc_label = QLabel(prompt)
         desc_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         desc_label.setWordWrap(True)
         desc_label.setStyleSheet("""
             QLabel {
-                color: #e8e8e8;
-                font-size: 13px;
+                color: %s;
+                font-size: 14px;
+                font-weight: 500;
                 line-height: 1.6;
+                background: transparent;
             }
-        """ if self.dark_mode else """
-            QLabel {
-                color: #2c2c2c;
-                font-size: 13px;
-                line-height: 1.6;
-            }
-        """)
+        """ % ("#ffffff" if self.dark_mode else "#1f2937"))
+        banner_layout.addWidget(desc_label)
+        main_layout.addWidget(banner)
         
-        main_layout.addWidget(desc_label)
+        # Content area
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(24, 24, 24, 24)
+        content_layout.setSpacing(16)
         
         # Create input container with buttons inside
         input_container = QWidget()
@@ -4339,22 +4605,22 @@ class MainWindow(QMainWindow):
             QWidget#input-container {
                 background-color: %s;
                 border: 1px solid %s;
-                border-radius: 12px;
+                border-radius: 16px;
             }
         """ % (
-            "#1a1a1a" if self.dark_mode else "#f3f4f6",
-            "#4a4a4a" if self.dark_mode else "#d1d5db"
+            "#0f0f0f" if self.dark_mode else "#f9fafb",
+            "#2a2a2a" if self.dark_mode else "#d1d5db"
         ))
         input_layout = QVBoxLayout(input_container)
-        input_layout.setContentsMargins(16, 16, 16, 16)
-        input_layout.setSpacing(12)
+        input_layout.setContentsMargins(20, 20, 20, 20)
+        input_layout.setSpacing(14)
         
         # Styled input field to match main page
         input_field = QTextEdit()
         input_field.setObjectName("script-editor")
-        input_field.setMinimumHeight(120)
-        input_field.setMinimumWidth(400)
-        input_field.setMaximumHeight(200)
+        input_field.setMinimumHeight(160)
+        input_field.setMinimumWidth(440)
+        input_field.setMaximumHeight(280)
         input_field.setPlaceholderText("여기에 입력하세요")
         
         input_layout.addWidget(input_field)
@@ -4368,11 +4634,22 @@ class MainWindow(QMainWindow):
         voice_btn = None
         if enable_voice and sr is not None:
             voice_btn = QPushButton("[MIC]")
-            voice_btn.setObjectName("upload-button")
-            voice_btn.setMaximumWidth(44)
-            voice_btn.setMinimumWidth(44)
-            voice_btn.setMinimumHeight(36)
+            voice_btn.setObjectName("voice-input-button")
+            voice_btn.setFixedSize(44, 44)
+            voice_btn.setCursor(Qt.CursorShape.PointingHandCursor)
             voice_btn.setToolTip("음성으로 입력하기")
+            voice_btn.setStyleSheet("""
+                QPushButton#voice-input-button {
+                    background-color: %s;
+                    border: 1px solid %s;
+                    border-radius: 8px;
+                }
+                QPushButton#voice-input-button:hover {
+                    background-color: %s;
+                }
+            """ % (
+                ("#1a1a1a", "#2a2a2a", "#252525") if self.dark_mode else ("#ffffff", "#d1d5db", "#f3f4f6")
+            ))
             
             def on_voice_click():
                 dialog.hide()  # Hide dialog while recording
@@ -4390,26 +4667,62 @@ class MainWindow(QMainWindow):
         
         button_row.addStretch()
         
+        # Cancel button - text only, no background
         cancel_btn = QPushButton("Cancel")
         cancel_btn.setObjectName("secondary-button")
         cancel_btn.setMinimumWidth(80)
-        cancel_btn.setMaximumWidth(100)
-        cancel_btn.setMinimumHeight(36)
-        cancel_btn.setStyleSheet(
-            "background: transparent; border: none; font-weight: bold; padding: 8px 14px;"
-        )
+        cancel_btn.setMaximumWidth(110)
+        cancel_btn.setMinimumHeight(40)
+        cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        cancel_btn.setStyleSheet("""
+            QPushButton#secondary-button {
+                background: transparent;
+                border: none;
+                color: %s;
+                font-weight: 600;
+                font-size: 15px;
+                padding: 8px 16px;
+                border-radius: 8px;
+            }
+            QPushButton#secondary-button:hover {
+                background: %s;
+            }
+        """ % (
+            ("#9ca3af", "#1f1f1f") if self.dark_mode else ("#6b7280", "#f3f4f6")
+        ))
         
+        # OK button - prominent blue button
         ok_btn = QPushButton("OK")
         ok_btn.setObjectName("primary-action")
-        ok_btn.setMaximumWidth(80)
-        ok_btn.setMinimumHeight(32)
+        ok_btn.setMinimumWidth(90)
+        ok_btn.setMaximumWidth(110)
+        ok_btn.setMinimumHeight(40)
+        ok_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        ok_btn.setStyleSheet("""
+            QPushButton#primary-action {
+                background-color: #4169e1;
+                color: #ffffff;
+                border: none;
+                border-radius: 8px;
+                font-weight: 700;
+                font-size: 15px;
+                padding: 8px 20px;
+            }
+            QPushButton#primary-action:hover {
+                background-color: #5177e8;
+            }
+            QPushButton#primary-action:pressed {
+                background-color: #3459c9;
+            }
+        """)
         
         button_row.addWidget(cancel_btn)
         button_row.addWidget(ok_btn)
         
         input_layout.addLayout(button_row)
         
-        main_layout.addWidget(input_container)
+        content_layout.addWidget(input_container)
+        main_layout.addWidget(content)
         
         # Apply theme to text editor
         theme_name = "dark" if self.dark_mode else "light"
@@ -4446,8 +4759,12 @@ class MainWindow(QMainWindow):
         """Generate script using ChatGPT API."""
         print("[MainWindow] _generate_script_with_ai called")
         
-        # Display user's input on the right side
-        self._append_user_input(description)
+        # Display user's prompt in the chat transcript (ChatGPT-style)
+        try:
+            self._chat_add_message("user", description)
+            self._show_thinking_animation()
+        except Exception:
+            self._append_user_input(description)
         
         self.run_button.setEnabled(False)
         self.ai_generate_button.setEnabled(False)
@@ -4515,14 +4832,23 @@ class MainWindow(QMainWindow):
         # Wait for animation to complete before clearing
         def finish_animation():
             self._clear_progress_message()
-            # Display code with Korean label
-            if code:
-                self._append_log("\n\n💻 코드")
-                self._append_log(code)
-            # Display description with Korean label
-            if description:
-                self._append_log("\n📝 설명")
-                self._append_log(description)
+            self._remove_thinking_animation()
+            # Display result in chat transcript
+            try:
+                parts: list[str] = []
+                if code:
+                    parts.append("💻 코드\n" + code)
+                if description:
+                    parts.append("📝 설명\n" + description)
+                self._chat_add_message("assistant", "\n\n".join(parts) if parts else "완료되었습니다.")
+            except Exception:
+                # Fallback to legacy log output
+                if code:
+                    self._append_log("\n\n💻 코드")
+                    self._append_log(code)
+                if description:
+                    self._append_log("\n📝 설명")
+                    self._append_log(description)
             # Put code in editor
             if code:
                 self.script_edit.setPlainText(code)
@@ -4535,7 +4861,11 @@ class MainWindow(QMainWindow):
     def _on_generate_error(self, error_msg: str) -> None:
         """Handle script generation error."""
         self._clear_progress_message()
-        self._append_log(f"❌ 스크립트 생성 실패: {error_msg}")
+        self._remove_thinking_animation()
+        try:
+            self._chat_add_message("assistant", f"❌ 스크립트 생성 실패: {error_msg}")
+        except Exception:
+            self._append_log(f"❌ 스크립트 생성 실패: {error_msg}")
         self._show_error_dialog(f"스크립트 생성 중 오류가 발생했습니다.\n\n{error_msg}")
         self.run_button.setEnabled(True)
         self.ai_generate_button.setEnabled(True)
@@ -4550,8 +4880,12 @@ class MainWindow(QMainWindow):
         """Optimize current script using ChatGPT API."""
         print("[MainWindow] _optimize_script_with_ai called")
         
-        # Display user's input on the right side
-        self._append_user_input(feedback if feedback.strip() else "(기본 최적화 요청)")
+        # Display user's prompt in the chat transcript (ChatGPT-style)
+        try:
+            self._chat_add_message("user", feedback if feedback.strip() else "(기본 최적화 요청)")
+            self._show_thinking_animation()
+        except Exception:
+            self._append_user_input(feedback if feedback.strip() else "(기본 최적화 요청)")
         
         self.run_button.setEnabled(False)
         self.ai_generate_button.setEnabled(False)
@@ -4611,15 +4945,23 @@ class MainWindow(QMainWindow):
         # Wait for animation to complete before clearing
         def finish_animation():
             self._clear_progress_message()
-            # Display code with Korean label
-            if code:
-                self._append_log("💻 코드\n")
-                self._append_log(code)
-                self._append_log("\n")
-            # Display description with Korean label
-            if description:
-                self._append_log("\n📝 설명\n")
-                self._append_log(description)
+            self._remove_thinking_animation()
+            # Display result in chat transcript
+            try:
+                parts: list[str] = []
+                if code:
+                    parts.append("💻 코드\n" + code)
+                if description:
+                    parts.append("📝 설명\n" + description)
+                self._chat_add_message("assistant", "\n\n".join(parts) if parts else "완료되었습니다.")
+            except Exception:
+                if code:
+                    self._append_log("💻 코드\n")
+                    self._append_log(code)
+                    self._append_log("\n")
+                if description:
+                    self._append_log("\n📝 설명\n")
+                    self._append_log(description)
             # Put code in editor
             if code:
                 self.script_edit.setPlainText(code)
@@ -4633,7 +4975,11 @@ class MainWindow(QMainWindow):
     def _on_optimize_error(self, error_msg: str) -> None:
         """Handle script optimization error."""
         self._clear_progress_message()
-        self._append_log(f"❌ 스크립트 최적화 실패: {error_msg}")
+        self._remove_thinking_animation()
+        try:
+            self._chat_add_message("assistant", f"❌ 스크립트 최적화 실패: {error_msg}")
+        except Exception:
+            self._append_log(f"❌ 스크립트 최적화 실패: {error_msg}")
         self._show_error_dialog(f"스크립트 최적화 중 오류가 발생했습니다.\n\n{error_msg}")
         self.run_button.setEnabled(True)
         self.ai_generate_button.setEnabled(True)
