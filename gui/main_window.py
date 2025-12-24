@@ -1784,6 +1784,7 @@ class MainWindow(QMainWindow):
         nb_lyt.setSpacing(2)
         name_lbl = QLabel(self.profile_display_name)
         name_lbl.setObjectName("drawer-user-name")
+        self.drawer_name_label = name_lbl  # Store reference for style updates
         # Apply theme-aware typography: bold name, darker in light mode, white in dark mode
         try:
             if getattr(self, 'dark_mode', False):
@@ -2152,6 +2153,7 @@ class MainWindow(QMainWindow):
             override = "\nQWidget#main-area { background-color: #000000; color: #ffffff; }\nQWidget#central { background-color: #000000; color: #ffffff; }\nQMainWindow { background-color: #000000; color: #ffffff; }\n"
             override += "\nQFrame#drawer { background-color: transparent; border-left: none; color: #e8e8e8; }\nQWidget#drawer-profile { padding: 8px; }\nQWidget#drawer-overlay { background: rgba(0,0,0,0.36); }\n"
             override += "\nQWidget, QLabel, QTextEdit { color: #e8e8e8; }\n"
+            override += "\nQLabel#drawer-user-name { color: #ffffff !important; }\n"
             override += "\nQFrame#profile-popup { background: #111111; color: #ffffff; }\nQFrame#profile-popup QPushButton#profile-popup-action { font-size: 15px; padding: 6px 8px; font-weight:700; color: #ffffff; }\nQFrame#profile-popup QLabel { color: #ffffff; }\nQWidget#profile-popup-row { padding: 0px; }\nQCheckBox { min-width: 40px; min-height: 24px; }\n"
 
         self.setStyleSheet(theme_qss + override)
@@ -2166,6 +2168,11 @@ class MainWindow(QMainWindow):
         # Chat transcript bubbles should update on theme toggle
         try:
             self._refresh_chat_transcript_styles()
+        except Exception:
+            pass
+        # Drawer profile name should be white in dark mode
+        try:
+            self._refresh_drawer_name_style()
         except Exception:
             pass
         # Additional adaptive styling to match simplified layout
@@ -4240,6 +4247,19 @@ class MainWindow(QMainWindow):
         try:
             for role, _row, bubble in getattr(self, "_chat_widgets", []):
                 self._apply_chat_bubble_style(role, bubble)
+        except Exception:
+            pass
+
+    def _refresh_drawer_name_style(self) -> None:
+        """Reapply theme-aware style to drawer profile name label."""
+        lbl = getattr(self, "drawer_name_label", None)
+        if lbl is None:
+            return
+        try:
+            if self.dark_mode:
+                lbl.setStyleSheet('font-weight:800; font-size:16px; color:#ffffff;')
+            else:
+                lbl.setStyleSheet('font-weight:800; font-size:16px; color:#0f1724;')
         except Exception:
             pass
 
