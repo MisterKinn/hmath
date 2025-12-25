@@ -165,14 +165,20 @@ class ChatGPTHelper:
             "Relations & Sets: \\leq, \\geq, \\neq, \\approx, \\in, \\subset, \\cap, \\cup\n"
             "Logic & Other: \\exists, \\forall, \\Rightarrow, \\infty, \\partial, \\nabla\n"
             "\n\nReturn your response in this exact format:\n\n"
-            "[DESCRIPTION]\nBrief explanation of what the code does in Korean (2-3 sentences)\n[/DESCRIPTION]\n\n"
+            "[DESCRIPTION]\n"
+            "Write a natural, friendly response in Korean (1-2 sentences) confirming what you did for the user. "
+            "DO NOT explain the code or technical details. "
+            "Speak like a helpful assistant confirming the task (e.g., '네, 요청하신 대로 이차방정식 수식을 작성했습니다. 더 필요한 게 있으시면 말씀해주세요!'). "
+            "Be conversational and end with an offer to help more.\n"
+            "[/DESCRIPTION]\n\n"
             "[CODE]\nOnly the essential lines of code for the requested task, without any boilerplate, classes, functions, or extra comments unless explicitly requested. Be as brief as possible. You can add comment in the code in Korean\n[/CODE]"
         )
         user_message = (
-            f"Generate minimal Python code for HWP automation with the following requirements:\n\n"
-            f"{description}\n\n"
+            f"User request: {description}\n\n"
             f"{f'Additional context:{context}' if context else ''}\n\n"
-            "Follow the format strictly: [DESCRIPTION]...description...[/DESCRIPTION] and [CODE]...code...[/CODE]"
+            "Generate minimal Python code for this request. "
+            "In the DESCRIPTION section, write a natural conversational response confirming what you did (not technical explanation). "
+            "Follow the format strictly: [DESCRIPTION]...natural response...[/DESCRIPTION] and [CODE]...code...[/CODE]"
         )
 
         try:
@@ -240,14 +246,20 @@ class ChatGPTHelper:
             "Relations & Sets: \\leq, \\geq, \\neq, \\approx, \\in, \\subset, \\cap, \\cup\n"
             "Logic & Other: \\exists, \\forall, \\Rightarrow, \\infty, \\partial, \\nabla\n"
             "\n\nReturn your response in this exact format:\n\n"
-            "[DESCRIPTION]\nBrief explanation of the optimizations made in Korean (2-3 sentences)\n[/DESCRIPTION]\n\n"
+            "[DESCRIPTION]\n"
+            "Write a natural, friendly response in Korean (1-2 sentences) confirming what you did for the user. "
+            "DO NOT explain the code or technical details. "
+            "Speak like a helpful assistant confirming the task (e.g., '네, 요청하신 대로 코드를 개선했습니다. 더 필요한 게 있으시면 말씀해주세요!'). "
+            "Be conversational and end with an offer to help more.\n"
+            "[/DESCRIPTION]\n\n"
             "[CODE]\nOnly the simplified and optimized code\n[/CODE]"
         )
         user_message = (
             f"Simplify and optimize this HWP automation script:\n\n"
             f"```python\n{script}\n```\n\n"
-            f"{f'Simplification goals: {feedback}' if feedback else 'Make the code as simple and minimal as possible.'}\n\n"
-            "Follow the format strictly: [DESCRIPTION]...description...[/DESCRIPTION] and [CODE]...code...[/CODE]"
+            f"{f'User feedback: {feedback}' if feedback else 'Make the code as simple and minimal as possible.'}\n\n"
+            "In the DESCRIPTION section, write a natural conversational response confirming what you did (not technical explanation). "
+            "Follow the format strictly: [DESCRIPTION]...natural response...[/DESCRIPTION] and [CODE]...code...[/CODE]"
         )
 
         try:

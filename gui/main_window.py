@@ -784,6 +784,14 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
+    def eventFilter(self, obj, event) -> bool:
+        """Event filter for handling various widget events."""
+        # Pass event to parent class
+        try:
+            return super().eventFilter(obj, event)
+        except Exception:
+            return False
+
     def _activate_chat(self, chat_id: str) -> None:
         """Activate the chat with the given id, loading its content into the UI."""
         try:
@@ -1067,17 +1075,38 @@ class MainWindow(QMainWindow):
         script_layout.setContentsMargins(16, 16, 16, 16)
         script_layout.setSpacing(12)
         
-        # Script editor
+        # Natural language input field (changed from code editor to chat-like input)
         self.script_edit = QTextEdit()
         self.script_edit.setObjectName("script-editor")
-        self.script_edit.setPlaceholderText("코드를 작성하거나 붙여넣으세요")
-        self.script_edit.setPlainText(DEFAULT_SCRIPT.strip())
+        self.script_edit.setPlaceholderText("무엇을 하고 싶으신가요? (예: '수학 문제'라는 제목을 입력하고 이차방정식 공식을 삽입해줘)")
+        self.script_edit.setPlainText("")  # Start with empty input
         # Smaller editor height to reduce overall input form height.
         self.script_edit.setMaximumHeight(220)
         self.script_edit.setMinimumHeight(140)
         # Custom context menu in Korean
         self.script_edit.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.script_edit.customContextMenuRequested.connect(self._show_editor_context_menu)
+        
+        # Override keyPressEvent for Enter/Shift+Enter handling
+        original_key_press = self.script_edit.keyPressEvent
+        def custom_key_press(event):
+            # Check if Enter or Return key is pressed
+            if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                # Check if Shift is held down
+                if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                    # Shift+Enter: insert new line (default behavior)
+                    original_key_press(event)
+                else:
+                    # Enter alone: send message
+                    try:
+                        self._handle_run_clicked()
+                    except Exception as e:
+                        print(f"Error in custom_key_press: {e}")
+            else:
+                # Other keys: default behavior
+                original_key_press(event)
+        
+        self.script_edit.keyPressEvent = custom_key_press  # type: ignore[method-assign]
         
         script_layout.addWidget(self.script_edit)
         
@@ -1342,23 +1371,13 @@ class MainWindow(QMainWindow):
 
         top_bar_layout.addStretch()
         main_column.insertWidget(0, top_bar, 0)
-        
-        # Help buttons fixed below model selection
-        help_buttons_container = QWidget()
-        help_buttons_container.setObjectName("help-buttons-fixed")
-        help_buttons_container.setStyleSheet("background-color: transparent;")
-        help_buttons_layout = QHBoxLayout(help_buttons_container)
-        help_buttons_layout.setContentsMargins(12, 16, 12, 0)
-        help_buttons_layout.setSpacing(0)
-        help_buttons_layout.addWidget(self._build_help_buttons(), alignment=Qt.AlignmentFlag.AlignCenter)
-        main_column.insertWidget(1, help_buttons_container, 0)
 
         # Insert chat transcript area above the input. Hidden until first AI message.
         try:
             self.output_area.hide()
         except Exception:
             pass
-        main_column.insertWidget(3, self.output_area, 1)
+        main_column.insertWidget(2, self.output_area, 1)
 
         # Input pinned to bottom; height managed by _update_composer_height()
         main_column.addWidget(input_area, 0)
@@ -1383,6 +1402,7 @@ class MainWindow(QMainWindow):
         self._thinking_widget: tuple[QWidget, QLabel] | None = None  # (row_widget, bubble_label)
         self._thinking_timer: QTimer | None = None
         self._thinking_dots = 0
+        self._auto_execute_mode = False  # Flag to auto-execute generated code without showing it
 
 
     def _build_header(self) -> QWidget:
@@ -2963,17 +2983,30 @@ class MainWindow(QMainWindow):
         menu.exec(self.script_edit.mapToGlobal(pos))
 
     def _handle_run_clicked(self) -> None:
+        """Handle run button click - now triggers AI generation and auto-execution."""
         if self._worker and self._worker.isRunning():
-            self._show_info_dialog("진행 중", "이미 스크립트를 실행 중입니다.")
+            self._show_info_dialog("진행 중", "이미 작업을 실행 중입니다.")
             return
-        script = self.script_edit.toPlainText()
-        self._worker = ScriptWorker(script, self)
-        self._worker.log_signal.connect(self._append_log)
-        self._worker.error_signal.connect(self._handle_error)
-        self._worker.finished_signal.connect(self._handle_finished)
-        self.run_button.setEnabled(False)
-        self._append_log("=== 실행 요청 ===")
-        self._worker.start()
+        
+        # Get natural language input from user
+        user_input = self.script_edit.toPlainText().strip()
+        if not user_input:
+            self._show_info_dialog("입력 필요", "무엇을 하고 싶으신지 입력해주세요.")
+            return
+        
+        # Check if ChatGPT is available
+        if not self.chatgpt.is_available():
+            self._show_error_dialog(
+                "ChatGPT API를 사용할 수 없습니다.\n\n"
+                "자세한 사항은 개발진에게 문의해주세요."
+            )
+            return
+        
+        # Clear input field
+        self.script_edit.setPlainText("")
+        
+        # Generate code with AI and auto-execute
+        self._generate_and_execute_with_ai(user_input)
 
     def _handle_error(self, message: str) -> None:
         self._append_log(f"❌ {message}")
@@ -3728,6 +3761,7 @@ class MainWindow(QMainWindow):
 
         add_row('upgrade', '플랜 업그레이드', _open_upgrade)
         add_row('profile', '프로필 관리', _open_profile)
+        add_row('edit', '코드 입력', self._show_code_input_dialog)
         # Show action text based on current theme: suggest switching to the opposite mode
         theme_row_label = '라이트 모드' if self.dark_mode else '다크 모드'
         add_row('light', theme_row_label, handler=None, checkable=True, checked=self.dark_mode)
@@ -3753,6 +3787,196 @@ class MainWindow(QMainWindow):
     def _show_account_popup(self) -> None:
         """Compatibility shim: show the profile menu (redirects to _show_profile_menu)."""
         self._show_profile_menu()
+    
+    def _show_code_input_dialog(self) -> None:
+        """Show code input dialog for advanced users who want to write Python code directly."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("코드 입력")
+        dialog.setModal(True)
+        dialog.setMinimumSize(700, 500)
+        
+        # Set dialog background color (theme-aware)
+        dialog.setStyleSheet("""
+            QDialog {
+                background-color: %s;
+            }
+        """ % ("#1a1a1a" if self.dark_mode else "#ffffff"))
+        
+        # Create main layout
+        main_layout = QVBoxLayout(dialog)
+        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout.setSpacing(16)
+        
+        # Title label
+        title_label = QLabel("Python 코드 입력")
+        title_label.setStyleSheet("""
+            QLabel {
+                color: %s;
+                font-size: 18px;
+                font-weight: 700;
+            }
+        """ % ("#ffffff" if self.dark_mode else "#1f2937"))
+        main_layout.addWidget(title_label)
+        
+        # Description label
+        desc_label = QLabel("한글 문서 자동화를 위한 Python 코드를 작성하세요. 사용 가능한 함수: insert_text(), insert_paragraph(), insert_equation(), insert_table() 등")
+        desc_label.setWordWrap(True)
+        desc_label.setStyleSheet("""
+            QLabel {
+                color: %s;
+                font-size: 13px;
+            }
+        """ % ("#9ca3af" if self.dark_mode else "#6b7280"))
+        main_layout.addWidget(desc_label)
+        
+        # Code editor
+        code_editor = QTextEdit()
+        code_editor.setObjectName("code-input-editor")
+        code_editor.setPlaceholderText("# Python 코드를 입력하세요\n# 예: insert_text('Hello World')")
+        code_editor.setPlainText("")
+        code_editor.setMinimumHeight(300)
+        
+        # Apply theme to code editor
+        theme_name = "dark" if self.dark_mode else "light"
+        theme_qss = _load_theme(theme_name)
+        code_editor.setStyleSheet(theme_qss)
+        
+        main_layout.addWidget(code_editor)
+        
+        # Button row
+        button_row = QHBoxLayout()
+        button_row.setSpacing(12)
+        
+        # LaTeX helper button (left side)
+        latex_btn = QPushButton("LaTeX 가이드")
+        latex_btn.setObjectName("latex-helper-button")
+        latex_btn.setMinimumWidth(110)
+        latex_btn.setMinimumHeight(40)
+        latex_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        latex_btn.setStyleSheet("""
+            QPushButton#latex-helper-button {
+                background: transparent;
+                border: 1px solid %s;
+                color: %s;
+                font-weight: 600;
+                font-size: 15px;
+                padding: 8px 16px;
+                border-radius: 8px;
+            }
+            QPushButton#latex-helper-button:hover {
+                background: %s;
+            }
+        """ % (
+            ("#374151", "#ffffff", "#1f1f1f") if self.dark_mode else ("#d1d5db", "#374151", "#f3f4f6")
+        ))
+        latex_btn.clicked.connect(self._show_latex_helper)
+        button_row.addWidget(latex_btn)
+        
+        button_row.addStretch()
+        
+        # Cancel button
+        cancel_btn = QPushButton("취소")
+        cancel_btn.setObjectName("secondary-button")
+        cancel_btn.setMinimumWidth(80)
+        cancel_btn.setMinimumHeight(40)
+        cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        cancel_btn.setStyleSheet("""
+            QPushButton#secondary-button {
+                background: transparent;
+                border: none;
+                color: %s;
+                font-weight: 600;
+                font-size: 15px;
+                padding: 8px 16px;
+                border-radius: 8px;
+            }
+            QPushButton#secondary-button:hover {
+                background: %s;
+            }
+        """ % (
+            ("#9ca3af", "#1f1f1f") if self.dark_mode else ("#6b7280", "#f3f4f6")
+        ))
+        cancel_btn.clicked.connect(dialog.reject)
+        button_row.addWidget(cancel_btn)
+        
+        # Run button
+        run_btn = QPushButton("실행")
+        run_btn.setObjectName("primary-action")
+        run_btn.setMinimumWidth(90)
+        run_btn.setMinimumHeight(40)
+        run_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        run_btn.setStyleSheet("""
+            QPushButton#primary-action {
+                background-color: #4169e1;
+                color: #ffffff;
+                border: none;
+                border-radius: 8px;
+                font-weight: 700;
+                font-size: 15px;
+                padding: 8px 20px;
+            }
+            QPushButton#primary-action:hover {
+                background-color: #5177e8;
+            }
+            QPushButton#primary-action:pressed {
+                background-color: #3459c9;
+            }
+        """)
+        
+        def on_run():
+            code = code_editor.toPlainText().strip()
+            if not code:
+                self._show_info_dialog("알림", "코드를 입력해주세요.")
+                return
+            
+            # Execute the code
+            dialog.accept()
+            self._execute_code_directly(code)
+        
+        run_btn.clicked.connect(on_run)
+        button_row.addWidget(run_btn)
+        
+        main_layout.addLayout(button_row)
+        
+        dialog.exec()
+    
+    def _execute_code_directly(self, code: str) -> None:
+        """Execute Python code directly without AI generation."""
+        if self._worker and self._worker.isRunning():
+            self._show_info_dialog("진행 중", "이미 작업을 실행 중입니다.")
+            return
+        
+        # Show execution message in chat
+        try:
+            self._chat_add_message("user", "코드 실행")
+            self._chat_add_message("assistant", "코드를 실행하고 있습니다...")
+        except Exception:
+            pass
+        
+        # Execute the code
+        self._worker = ScriptWorker(code, self)
+        self._worker.log_signal.connect(lambda msg: None)  # Suppress log messages
+        self._worker.error_signal.connect(lambda err: self._chat_add_message("assistant", f"❌ 오류: {err}"))
+        self._worker.finished_signal.connect(lambda: self._on_code_execution_finished())
+        self.run_button.setEnabled(False)
+        if hasattr(self, "ai_generate_button"):
+            self.ai_generate_button.setEnabled(False)
+        if hasattr(self, "ai_optimize_button"):
+            self.ai_optimize_button.setEnabled(False)
+        self._worker.start()
+    
+    def _on_code_execution_finished(self) -> None:
+        """Handle completion of code execution from code input dialog."""
+        try:
+            self._chat_add_message("assistant", "✅ 코드 실행이 완료되었습니다!")
+        except Exception:
+            pass
+        self.run_button.setEnabled(True)
+        if hasattr(self, "ai_generate_button"):
+            self.ai_generate_button.setEnabled(True)
+        if hasattr(self, "ai_optimize_button"):
+            self.ai_optimize_button.setEnabled(True)
+    
     def _show_error_dialog(self, message: str) -> None:
         """Show elegant error dialog."""
         error_content = f"""
@@ -4112,7 +4336,6 @@ class MainWindow(QMainWindow):
             900,
             600,
             dark_mode=self.dark_mode,
-
         )
         msg.exec()
 
@@ -4787,9 +5010,63 @@ class MainWindow(QMainWindow):
             self._append_user_input(description)
         
         self.run_button.setEnabled(False)
-        self.ai_generate_button.setEnabled(False)
+        if hasattr(self, "ai_generate_button"):
+            self.ai_generate_button.setEnabled(False)
         if hasattr(self, "ai_optimize_button"):
             self.ai_optimize_button.setEnabled(False)
+        
+        # Get available functions context
+        context = """
+사용 가능한 함수들:
+- insert_text(text): 텍스트 삽입
+- insert_paragraph(): 문단 추가
+- insert_equation(latex_code, font_size_pt=14.0): LaTeX 수식 삽입
+- insert_hwpeqn(hwpeqn_code, font_size_pt=12.0): HWP 수식 형식 삽입
+- insert_image(image_path): 이미지 삽입
+"""
+        
+        # Create worker and thread
+        print("[MainWindow] Creating QThread and AIWorker...")
+        self.ai_thread = QThread()
+        self.ai_worker = AIWorker(self.chatgpt, "generate", description=description, context=context)
+        self.ai_worker.moveToThread(self.ai_thread)
+        print("[MainWindow] Worker moved to thread")
+        
+        # Connect signals
+        print("[MainWindow] Connecting signals...")
+        self.ai_thread.started.connect(self.ai_worker.run)
+        self.ai_worker.thought.connect(self._on_ai_thought)
+        self.ai_worker.finished.connect(self._on_generate_finished)
+        self.ai_worker.error.connect(self._on_generate_error)
+        self.ai_worker.finished.connect(self.ai_thread.quit)
+        self.ai_worker.error.connect(self.ai_thread.quit)
+        self.ai_thread.finished.connect(self.ai_thread.deleteLater)
+        print("[MainWindow] Signals connected")
+        
+        # Start the thread
+        print("[MainWindow] Starting thread...")
+        self.ai_thread.start()
+        print("[MainWindow] Thread started!")
+    
+    def _generate_and_execute_with_ai(self, description: str) -> None:
+        """Generate script using ChatGPT API and auto-execute it (without showing code to user)."""
+        print("[MainWindow] _generate_and_execute_with_ai called")
+        
+        # Display user's prompt in the chat transcript (ChatGPT-style)
+        try:
+            self._chat_add_message("user", description)
+            self._show_thinking_animation()
+        except Exception:
+            self._append_user_input(description)
+        
+        self.run_button.setEnabled(False)
+        if hasattr(self, "ai_generate_button"):
+            self.ai_generate_button.setEnabled(False)
+        if hasattr(self, "ai_optimize_button"):
+            self.ai_optimize_button.setEnabled(False)
+        
+        # Set auto-execute flag
+        self._auto_execute_mode = True
         
         # Get available functions context
         context = """
@@ -4853,42 +5130,110 @@ class MainWindow(QMainWindow):
         def finish_animation():
             self._clear_progress_message()
             self._remove_thinking_animation()
-            # Display result in chat transcript
-            try:
-                parts: list[str] = []
+            
+            # Check if we should auto-execute (new natural language mode)
+            if self._auto_execute_mode:
+                self._auto_execute_mode = False  # Reset flag
                 if code:
-                    parts.append("💻 코드\n" + code)
-                if description:
-                    parts.append("📝 설명\n" + description)
-                self._chat_add_message("assistant", "\n\n".join(parts) if parts else "완료되었습니다.")
-            except Exception:
-                # Fallback to legacy log output
+                    # Show description first (what AI will do)
+                    if description:
+                        try:
+                            self._chat_add_message("assistant", description)
+                        except Exception:
+                            pass
+                    
+                    # Check if HWP is available before executing
+                    hwp_available = False
+                    try:
+                        import win32com.client  # type: ignore
+                        hwp = win32com.client.gencache.EnsureDispatch("HWPFrame.HwpObject")
+                        hwp_available = True
+                    except Exception:
+                        pass
+                    
+                    if hwp_available:
+                        # Execute the code to modify HWP
+                        self._worker = ScriptWorker(code, self)
+                        self._worker.log_signal.connect(lambda msg: None)  # Suppress log messages
+                        self._worker.error_signal.connect(lambda err: self._chat_add_message("assistant", f"❌ 오류: {err}"))
+                        self._worker.finished_signal.connect(lambda: self._on_auto_execution_finished())
+                        self._worker.start()
+                    else:
+                        # HWP not available, just show response
+                        try:
+                            self._chat_add_message("assistant", "💡 한글(HWP)이 실행 중이지 않아 작업을 수행할 수 없습니다. 한글 문서를 열고 다시 시도해주세요.")
+                        except Exception:
+                            pass
+                        self.run_button.setEnabled(True)
+                        if hasattr(self, "ai_generate_button"):
+                            self.ai_generate_button.setEnabled(True)
+                        if hasattr(self, "ai_optimize_button"):
+                            self.ai_optimize_button.setEnabled(True)
+                else:
+                    # No code generated
+                    try:
+                        msg = description if description else "작업을 수행할 수 없었습니다."
+                        self._chat_add_message("assistant", msg)
+                    except Exception:
+                        pass
+                    self.run_button.setEnabled(True)
+                    if hasattr(self, "ai_generate_button"):
+                        self.ai_generate_button.setEnabled(True)
+                    if hasattr(self, "ai_optimize_button"):
+                        self.ai_optimize_button.setEnabled(True)
+            else:
+                # Original mode: show code to user
+                try:
+                    parts: list[str] = []
+                    if code:
+                        parts.append("💻 코드\n" + code)
+                    if description:
+                        parts.append("📝 설명\n" + description)
+                    self._chat_add_message("assistant", "\n\n".join(parts) if parts else "완료되었습니다.")
+                except Exception:
+                    # Fallback to legacy log output
+                    if code:
+                        self._append_log("\n\n💻 코드")
+                        self._append_log(code)
+                    if description:
+                        self._append_log("\n📝 설명")
+                        self._append_log(description)
+                # Put code in editor
                 if code:
-                    self._append_log("\n\n💻 코드")
-                    self._append_log(code)
-                if description:
-                    self._append_log("\n📝 설명")
-                    self._append_log(description)
-            # Put code in editor
-            if code:
-                self.script_edit.setPlainText(code)
-            self.run_button.setEnabled(True)
-            self.ai_generate_button.setEnabled(True)
-            self.ai_optimize_button.setEnabled(True)
+                    self.script_edit.setPlainText(code)
+                self.run_button.setEnabled(True)
+                if hasattr(self, "ai_generate_button"):
+                    self.ai_generate_button.setEnabled(True)
+                if hasattr(self, "ai_optimize_button"):
+                    self.ai_optimize_button.setEnabled(True)
         
         QTimer.singleShot(600, finish_animation)
+    
+    def _on_auto_execution_finished(self) -> None:
+        """Handle completion of auto-executed script."""
+        try:
+            self._chat_add_message("assistant", "✅ 한글 문서에 적용되었습니다!")
+        except Exception:
+            pass
+        self.run_button.setEnabled(True)
+        if hasattr(self, "ai_generate_button"):
+            self.ai_generate_button.setEnabled(True)
+        if hasattr(self, "ai_optimize_button"):
+            self.ai_optimize_button.setEnabled(True)
     
     def _on_generate_error(self, error_msg: str) -> None:
         """Handle script generation error."""
         self._clear_progress_message()
         self._remove_thinking_animation()
+        self._auto_execute_mode = False  # Reset flag on error
         try:
             self._chat_add_message("assistant", f"❌ 스크립트 생성 실패: {error_msg}")
         except Exception:
             self._append_log(f"❌ 스크립트 생성 실패: {error_msg}")
         self._show_error_dialog(f"스크립트 생성 중 오류가 발생했습니다.\n\n{error_msg}")
         self.run_button.setEnabled(True)
-        self.ai_generate_button.setEnabled(True)
+        if hasattr(self, "ai_generate_button"):
+            self.ai_generate_button.setEnabled(True)
         if hasattr(self, "ai_optimize_button"):
             self.ai_optimize_button.setEnabled(True)
 
@@ -4908,7 +5253,8 @@ class MainWindow(QMainWindow):
             self._append_user_input(feedback if feedback.strip() else "(기본 최적화 요청)")
         
         self.run_button.setEnabled(False)
-        self.ai_generate_button.setEnabled(False)
+        if hasattr(self, "ai_generate_button"):
+            self.ai_generate_button.setEnabled(False)
         if hasattr(self, "ai_optimize_button"):
             self.ai_optimize_button.setEnabled(False)
         
@@ -5002,7 +5348,8 @@ class MainWindow(QMainWindow):
             self._append_log(f"❌ 스크립트 최적화 실패: {error_msg}")
         self._show_error_dialog(f"스크립트 최적화 중 오류가 발생했습니다.\n\n{error_msg}")
         self.run_button.setEnabled(True)
-        self.ai_generate_button.setEnabled(True)
+        if hasattr(self, "ai_generate_button"):
+            self.ai_generate_button.setEnabled(True)
         if hasattr(self, "ai_optimize_button"):
             self.ai_optimize_button.setEnabled(True)
 
