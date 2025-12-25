@@ -75,11 +75,21 @@ class HwpController:
             return
 
         try:
+            # Connect to existing HWP instance (don't create new document)
             self._hwp = pyhwpx.Hwp(
-                new=self._options.new_instance,
+                new=False,  # Always try to connect to existing instance first
                 visible=self._options.visible,
                 register_module=self._options.register_module,
             )
+            
+            # Check if a document is open
+            try:
+                if self._hwp.Path == "" and not self._options.new_instance:
+                    # No document is open, create a new one only if explicitly requested
+                    logger.warning("No HWP document is currently open. Please open a document first.")
+            except Exception:
+                pass
+            
             logger.info("Connected to Hancom Hangul successfully.")
         except Exception as exc:  # pragma: no cover
             self._hwp = None
