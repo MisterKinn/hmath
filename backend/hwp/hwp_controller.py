@@ -227,7 +227,7 @@ class HwpController:
         """
         Open the 수식 입력 (Formula Input) window.
         
-        On macOS: Uses Ctrl+N+M shortcut to open formula input window.
+        On macOS: Opens the formula editor window via menu.
         On Windows: Not applicable (uses different method).
         """
         hwp = self._ensure_connected()
@@ -238,6 +238,48 @@ class HwpController:
                 raise HwpControllerError("open_formula_editor() is only available on macOS")
         except Exception as exc:
             raise HwpControllerError(f"Failed to open formula editor: {exc}") from exc
+    
+    def type_in_open_formula_editor(self, text: str, close_window: bool = False) -> None:
+        """
+        Type text in an ALREADY OPEN 수식 편집기 window.
+        
+        This assumes the formula editor window is already open.
+        Use open_formula_editor() first!
+        
+        Args:
+            text: Plain text to type (can be formula syntax or plain text)
+            close_window: If True, closes window to insert into document
+        """
+        hwp = self._ensure_connected()
+        try:
+            if IS_MACOS:
+                hwp.type_in_open_formula_editor(text, close_window)
+            else:
+                raise HwpControllerError("type_in_open_formula_editor() is only available on macOS")
+        except Exception as exc:
+            raise HwpControllerError(f"Failed to type in formula editor: {exc}") from exc
+    
+    def write_in_formula_editor(self, text: str, close_window: bool = False) -> None:
+        """
+        Complete process: Open formula editor window and type text.
+        
+        Process:
+        1. Open the 수식 편집기 window
+        2. Wait for window to open  
+        3. Type text in the bottom black input area
+        
+        Args:
+            text: Plain text to type (can be formula syntax or plain text)
+            close_window: If True, closes window to insert into document
+        """
+        hwp = self._ensure_connected()
+        try:
+            if IS_MACOS:
+                hwp.write_in_formula_editor(text, close_window)
+            else:
+                raise HwpControllerError("write_in_formula_editor() is only available on macOS")
+        except Exception as exc:
+            raise HwpControllerError(f"Failed to write in formula editor: {exc}") from exc
     
     def insert_equation_via_editor(self, formula_text: str) -> None:
         """

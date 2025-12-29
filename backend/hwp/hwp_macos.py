@@ -275,84 +275,125 @@ class HwpMacOS:
                 f"오류: {error_msg}"
             ) from exc
     
+    def type_in_open_formula_editor(self, text: str, close_window: bool = False) -> None:
+        """
+        Type text in an ALREADY OPEN 수식 편집기 (Formula Editor) window.
+        
+        This assumes the formula editor window is already open.
+        Use open_formula_editor() first to open the window.
+        
+        Args:
+            text: Plain text to type (can be formula syntax or regular text)
+            close_window: If True, closes window with Escape and clicks "넣기" button
+        """
+        try:
+            # Escape special characters for AppleScript
+            escaped_text = text.replace('\\', '\\\\').replace('"', '\\"')
+            
+            # Build close command with popup handling
+            close_commands = ""
+            if close_window:
+                close_commands = '''
+                    -- Close window with Escape
+                    key code 53
+                    delay 1.0
+                    
+                    -- Click "넣기" button in popup
+                    try
+                        click button "넣기" of window 1
+                        delay 0.3
+                    on error
+                        -- If popup doesn't appear or button not found, just continue
+                        delay 0.1
+                    end try
+'''
+            
+            script = f'''
+            tell application "{self._app_name}"
+                activate
+            end tell
+            
+            delay 0.3
+            
+            tell application "System Events"
+                tell process "{self._app_name}"
+                    -- Find and focus on the scroll area (bottom black input area)
+                    set formulaWindow to window "수식 편집기"
+                    
+                    repeat with elem in (UI elements of formulaWindow)
+                        if role of elem is "AXScrollArea" then
+                            -- Focus on the scroll area (bottom input area)
+                            set focused of elem to true
+                            delay 0.3
+                            
+                            -- Type text in the bottom input area
+                            keystroke "{escaped_text}"
+                            delay 0.5
+                            {close_commands}
+                            return "SUCCESS: Typed and inserted"
+                        end if
+                    end repeat
+                    
+                    return "ERROR: Bottom input area not found"
+                end tell
+            end tell
+            '''
+            
+            result = self._run_applescript(script)
+            
+            if result and "SUCCESS" in result:
+                action = "inserted" if close_window else "typed"
+                logger.info(f"Text {action} in formula editor: {text[:50]}...")
+            else:
+                logger.warning(f"Formula editor result: {result.strip()}")
+            
+        except Exception as exc:
+            raise HwpMacOSError(f"Failed to type in formula editor: {exc}") from exc
+    
+    def write_in_formula_editor(self, text: str, close_window: bool = False) -> None:
+        """
+        Complete process: Open formula editor window and type text.
+        
+        Process:
+        1. Open the 수식 편집기 window
+        2. Wait for window to open
+        3. Type text in the bottom black input area
+        
+        Args:
+            text: Plain text to type (can be formula syntax or regular text)
+            close_window: If True, closes window with Escape to insert into document
+        """
+        try:
+            # Step 1: Open formula editor
+            logger.info("Step 1: Opening formula editor window...")
+            self.open_formula_editor()
+            
+            # Step 2: Wait for window to fully open
+            import time
+            time.sleep(1.5)
+            logger.info("Step 2: Window opened, ready to type...")
+            
+            # Step 3: Type text in the open window
+            logger.info(f"Step 3: Typing text: {text[:50]}...")
+            self.type_in_open_formula_editor(text, close_window)
+            
+        except Exception as exc:
+            raise HwpMacOSError(f"Failed to write in formula editor: {exc}") from exc
+    
     def insert_equation_via_editor(self, formula_text: str) -> None:
         """
         Insert equation using the 수식 편집기 (Formula Editor) window in 한글.
         
-        Opens the formula editor window using menu navigation, enters the formula, and inserts it.
+        Opens the formula editor window, enters the formula, and automatically clicks "넣기".
         The formula_text should be in 한글 수식 편집기 format (e.g., "a over b" for fractions).
         
         Args:
             formula_text: Formula in 한글 formula editor syntax
         """
         try:
-            # Activate HWP and execute complete formula insertion in one script
-            # This is more reliable than splitting into multiple AppleScript calls
-            
-            complete_script = f'''
-            tell application "{self._app_name}"
-                activate
-            end tell
-            
-            delay 0.5
-            
-            tell application "System Events"
-                tell process "{self._app_name}"
-                    -- Open formula editor via menu
-                    try
-                        click menu item "수식..." of menu "입력 " of menu bar 1
-                    on error
-                        try
-                            click menu item "수식..." of menu "입력" of menu bar 1
-                        on error
-                            try
-                                click menu item "수식" of menu "입력 " of menu bar 1
-                            on error
-                                click menu item "수식..." of menu "삽입" of menu bar 1
-                            end try
-                        end try
-                    end try
-                    
-                    -- Wait for formula editor to open
-                    delay 1.5
-                    
-                    -- Type formula in the text field
-                    try
-                        set formulaWindow to window "수식 편집기"
-                        
-                        -- Find and focus the text field
-                        repeat with elem in (UI elements of formulaWindow)
-                            if role of elem is "AXTextField" then
-                                set focused of elem to true
-                                delay 0.3
-                                
-                                -- Type the formula
-                                keystroke "{formula_text}"
-                                delay 0.5
-                                
-                                -- Close editor with Escape to insert the formula
-                                key code 53
-                                delay 0.3
-                                
-                                exit repeat
-                            end if
-                        end repeat
-                        
-                        return "SUCCESS"
-                    on error errMsg
-                        return "ERROR: " & errMsg
-                    end try
-                end tell
-            end tell
-            '''
-            
-            result = self._run_applescript(complete_script)
-            
-            if result and "SUCCESS" in result:
-                logger.info(f"Inserted equation via editor: {formula_text[:50]}...")
-            else:
-                logger.warning(f"Formula editor result: {result.strip()}")
-                # Don't raise error, as the formula might still have been inserted
+            # Use the new 3-step process
+            # This ensures we use the correct input area (bottom black area, not font size field)
+            self.write_in_formula_editor(formula_text, close_window=True)
             
         except Exception as exc:
             raise HwpMacOSError(f"Failed to insert equation via editor: {exc}") from exc
