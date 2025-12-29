@@ -1,0 +1,387 @@
+/* Common Dialog Styles */
+body {
+    font-family: "Pretendard", -apple-system, sans-serif;
+    color: #2c3e50;
+    line-height: 1.7;
+    padding: 20px;
+}
+
+body.dark-mode {
+    background-color: #1a1a1a;
+    color: #e8e8e8;
+}
+
+h2 {
+    color: #5377f6;
+    font-size: 24px;
+    font-weight: 600;
+    margin-bottom: 24px;
+    border-bottom: 2px solid #ede6f8;
+    padding-bottom: 12px;
+}
+
+body.dark-mode h2 {
+    color: #5377f6;
+    border-bottom-color: #1a2642;
+}
+
+/* Error Dialog Styles */
+.error-container {
+    background: linear-gradient(135deg, #fff5f5 0%, #ffffff 100%);
+    border-left: 4px solid #dc3545;
+    padding: 20px;
+    border-radius: 12px;
+    box-shadow: 0 4px 12px rgba(220, 53, 69, 0.1);
+}
+
+body.dark-mode .error-container {
+    background: linear-gradient(135deg, #3a1f1f 0%, #2a1a1a 100%);
+    border-left-color: #dc3545;
+}
+
+.error-icon {
+    display: inline-block;
+    font-size: 32px;
+    margin-right: 12px;
+    vertical-align: middle;
+}
+
+.error-title {
+    display: inline-block;
+    color: #dc3545;
+    font-size: 20px;
+    font-weight: 600;
+    margin-bottom: 16px;
+    vertical-align: middle;
+}
+
+.error-message {
+    background: #ffffff;
+    border: 1px solid #f5c2c7;
+    border-radius: 8px;
+    padding: 16px;
+    margin-top: 16px;
+    font-family: "Monaco", "Menlo", monospace;
+    font-size: 13px;
+    color: #842029;
+    line-height: 1.6;
+}
+
+body.dark-mode .error-message {
+    background: #1a1a1a;
+    border-color: #4a4a4a;
+    color: #ff9999;
+}
+
+/* Info Dialog Styles */
+.info-container {
+    background: linear-gradient(135deg, #e8f5f0 0%, #ffffff 100%);
+    border-left: 4px solid #5377f6;
+    padding: 20px;
+    border-radius: 12px;
+    box-shadow: 0 4px 12px rgba(83, 119, 246, 0.1);
+}
+
+body.dark-mode .info-container {
+    background: linear-gradient(135deg, #1a2642 0%, #1a1a1a 100%);
+    border-left-color: #5377f6;
+}
+
+.info-icon {
+    display: inline-block;
+    font-size: 32px;
+    margin-right: 12px;
+    vertical-align: middle;
+}
+
+.info-title {
+    display: inline-block;
+    color: #5377f6;
+    font-size: 20px;
+    font-weight: 600;
+    margin-bottom: 16px;
+    vertical-align: middle;
+}
+
+.info-message {
+    background: #ffffff;
+    border: 1px solid #b8e5d6;
+    border-radius: 8px;
+    padding: 16px;
+    margin-top: 16px;
+    font-size: 14px;
+    color: #2c3e50;
+    line-height: 1.6;
+}
+
+body.dark-mode .info-message {
+    background: #1a1a1a;
+    border-color: #4a4a4a;
+    color: #e8e8e8;
+}
+
+/* How To Dialog Styles */
+.step {
+    background: linear-gradient(135deg, #f8f9fa 0%, #ffffff 100%);
+    border-left: 4px solid #5377f6;
+    padding: 16px 20px;
+    margin: 16px 0;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+body.dark-mode .step {
+    background: linear-gradient(135deg, #2a2a2a 0%, #1a1a1a 100%);
+    border-left-color: #5377f6;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.step-num {
+    display: inline-block;
+    background: #5377f6;
+    color: white;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    text-align: center;
+    line-height: 28px;
+    font-weight: 600;
+    margin-right: 12px;
+    font-size: 14px;
+}
+
+.functions {
+    background: #f8f9fa;
+    border-radius: 12px;
+    padding: 20px;
+    margin-top: 24px;
+}
+
+body.dark-mode .functions {
+    background: #000000;
+}
+
+.functions h3 {
+    color: #2c3e50;
+    font-size: 18px;
+    font-weight: 600;
+    margin-bottom: 16px;
+}
+
+body.dark-mode .functions h3 {
+    color: #e8e8e8;
+}
+
+.func-item {
+    padding: 10px 0;
+    border-bottom: 1px solid #e8e8e8;
+}
+
+body.dark-mode .func-item {
+    border-bottom-color: #4a4a4a;
+}
+
+.func-item:last-child {
+    border-bottom: none;
+}
+
+/* Guard: keep rich-text <img> icons from rendering huge (Qt can ignore CSS sizing for SVG). */
+.functions .func-item img {
+    width: 18px !important;
+    height: 18px !important;
+    max-width: 18px !important;
+    max-height: 18px !important;
+    vertical-align: middle;
+}
+
+code {
+    background: #ffffff;
+    padding: 4px 8px;
+    border-radius: 6px;
+    font-family: "Monaco", "Menlo", monospace;
+    font-size: 13px;
+    color: #d63384;
+    border: 1px solid #f0f0f0;
+}
+
+body.dark-mode code {
+    background: #000000;
+    color: #9fef00;
+    border: 1px solid #4a4a4a;
+}
+
+.note {
+    background: #fff3cd;
+    border: 1px solid #ffc107;
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin-top: 20px;
+    color: #856404;
+}
+
+.note::before {
+    content: "[?] ";
+    font-size: 16px;
+}
+
+.help-text {
+    margin-top: 16px;
+    padding: 12px;
+    background: #fff3cd;
+    border-radius: 8px;
+    color: #856404;
+    font-size: 13px;
+}
+
+.help-text::before {
+    content: "[?] ";
+    font-size: 14px;
+}
+
+/* LaTeX Dialog Styles */
+.columns {
+    display: flex;
+    gap: 24px;
+    margin-top: 20px;
+}
+
+.column {
+    flex: 1;
+    background: #f8f9fa;
+    border-radius: 12px;
+    padding: 20px;
+}
+
+body.dark-mode .column {
+    background: #000000;
+}
+
+.section {
+    margin-bottom: 24px;
+}
+
+.section:last-child {
+    margin-bottom: 0;
+}
+
+.section-title {
+    color: #5377f6;
+    font-size: 15px;
+    font-weight: 600;
+    margin-bottom: 10px;
+    padding-bottom: 6px;
+    border-bottom: 2px solid #ede6f8;
+}
+
+body.dark-mode .section-title {
+    color: #5377f6;
+    border-bottom-color: #1a2642;
+}
+
+.greek code {
+    display: inline;
+    padding: 3px 6px;
+    margin: 2px;
+    font-size: 11px;
+}
+
+/* Settings Dialog Styles */
+.setting-section {
+    background: #f8f9fa;
+    border-radius: 12px;
+    padding: 20px;
+    margin: 16px 0;
+}
+
+body.dark-mode .setting-section {
+    background: #000000;
+}
+
+.setting-title {
+    color: #2c3e50;
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 12px;
+}
+
+body.dark-mode .setting-title {
+    color: #e8e8e8;
+}
+
+.setting-item {
+    display: flex;
+    align-items: center;
+    padding: 12px 0;
+    border-bottom: 1px solid #e8e8e8;
+}
+
+body.dark-mode .setting-item {
+    border-bottom-color: #4a4a4a;
+}
+
+.setting-item:last-child {
+    border-bottom: none;
+}
+
+.setting-label {
+    flex: 1;
+    color: #2c3e50;
+    font-size: 14px;
+}
+
+body.dark-mode .setting-label {
+    color: #e8e8e8;
+}
+
+.setting-value {
+    color: #2c3e50;
+    font-weight: 600;
+    font-size: 14px;
+}
+
+.info-box {
+    background: #e8f5f0;
+    border: 1px solid #5377f6;
+    border-radius: 8px;
+    padding: 16px;
+    margin-top: 20px;
+    color: #0a6f4f;
+}
+
+body.dark-mode .info-box {
+    background: #2a2a2a;
+    border-color: #4a4a4a;
+    color: #e8e8e8;
+}
+
+.info-box::before {
+    content: "[i] ";
+    font-size: 16px;
+}
+
+/* OK Button Styling */
+
+QPushButton {
+    background-color: #e5e7eb;
+    color: #000000;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    padding: 10px 32px;
+    font-size: 14px;
+    font-weight: 600;
+    min-width: 100px;
+}
+
+body.dark-mode QPushButton {
+    background-color: #374151;
+    color: #ffffff;
+    border: 1px solid #4a4a4a;
+}
+
+QPushButton:hover {
+    background-color: #dbe1e6;
+}
+
+QPushButton:pressed {
+    background-color: #cfd6dc;
+}

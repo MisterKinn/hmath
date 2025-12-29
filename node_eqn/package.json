@@ -1,0 +1,11 @@
+{
+  "name": "inline-hwp-ai-eqn",
+  "version": "0.1.0",
+  "description": "CLI wrapper around hwp-eqn-ts for LaTeX -> HwpEqn conversion",
+  "main": "hwp_eqn_cli.js",
+  "license": "MIT",
+  "dependencies": {
+    "hwp-eqn-ts": "^1.1.0"
+  }
+}
+

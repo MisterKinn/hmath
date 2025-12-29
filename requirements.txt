@@ -1,0 +1,13 @@
+PySide6>=6.6
+Pillow>=10.0
+pdf2image>=1.17.0
+pytesseract>=0.3.10
+opencv-python>=4.10.0
+numpy>=1.26
+pyinstaller>=6.0
+openai>=1.0.0
+python-dotenv>=1.0.0
+
+# Windows-only dependencies
+pyhwpx>=1.6.6; sys_platform == 'win32'
+pywin32>=305; sys_platform == 'win32'

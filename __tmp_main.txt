@@ -1,0 +1,494 @@
+1:"""
+2:Inline-style vertical GUI built with PySide6.
+3:"""
+4:
+5:from __future__ import annotations
+6:
+7:from dataclasses import dataclass
+8:from enum import Enum, auto
+9:from typing import List, Optional
+10:
+11:from PySide6.QtCore import Qt, Signal, QThread, QObject
+12:from PySide6.QtWidgets import (
+13:    QApplication,
+14:    QFileDialog,
+15:    QFrame,
+16:    QHBoxLayout,
+17:    QLabel,
+18:    QLineEdit,
+19:    QListWidget,
+20:    QListWidgetItem,
+21:    QMainWindow,
+22:    QMessageBox,
+23:    QPushButton,
+24:    QRadioButton,
+25:    QProgressBar,
+26:    QTextEdit,
+27:    QVBoxLayout,
+28:    QWidget,
+29:    QComboBox,
+30:)
+31:
+32:from backend.hwp.hwp_controller import HwpController, HwpControllerError
+33:from backend.pipeline.process_document import ProcessOptions, process_inputs
+34:
+35:
+36:class ContentMode(Enum):
+37:    TEXT = auto()
+38:    TEXT_EQUATIONS = auto()
+39:    TEXT_EQUATIONS_IMAGES = auto()
+40:
+41:
+42:@dataclass(slots=True)
+43:class GuiOptions:
+44:    content_mode: ContentMode = ContentMode.TEXT_EQUATIONS_IMAGES
+45:    ocr_mode: str = "Pix2Text (기본)"
+46:
+47:
+48:class ProcessingWorker(QThread):
+49:    log_signal = Signal(str)
+50:    error_signal = Signal(str)
+51:    progress_signal = Signal(int, int, str)
+52:
+53:    def __init__(
+54:        self, files: List[str], options: GuiOptions, parent: QObject | None = None
+55:    ) -> None:
+56:        super().__init__(parent)
+57:        self._files = files
+58:        self._options = options
+59:
+60:    def run(self) -> None:  # type: ignore[override]
+61:        try:
+62:            controller = HwpController()
+63:            controller.connect()
+64:            process_options = self._to_process_options()
+65:            process_inputs(
+66:                self._files,
+67:                process_options,
+68:                controller,
+69:                log=self.log_signal.emit,
+70:                progress=self._emit_progress,
+71:            )
+72:        except HwpControllerError as exc:
+73:            self.error_signal.emit(f"HWP ?�결 ?�패: {exc}")
+74:        except Exception as exc:  # pragma: no cover
+75:            self.error_signal.emit(str(exc))
+76:
+77:    def _to_process_options(self) -> ProcessOptions:
+78:        include_equations = self._options.content_mode in (
+79:            ContentMode.TEXT_EQUATIONS,
+80:            ContentMode.TEXT_EQUATIONS_IMAGES,
+81:        )
+82:        include_images = self._options.content_mode == ContentMode.TEXT_EQUATIONS_IMAGES
+83:        return ProcessOptions(
+84:            include_text=True,
+85:            include_equations=include_equations,
+86:            include_images=include_images,
+87:            ocr_mode=self._options.ocr_mode,
+88:        )
+89:
+90:    def _emit_progress(self, current: int, total: int, message: str) -> None:
+91:        self.progress_signal.emit(current, total, message)
+92:
+93:
+94:class MainWindow(QMainWindow):
+95:    start_processing_requested = Signal(list, GuiOptions)
+96:
+97:    def __init__(self) -> None:
+98:        super().__init__()
+99:        self.setWindowTitle("AMEX AI Copilot")
+100:        self.resize(460, 900)
+101:        self.setMinimumWidth(420)
+102:
+103:        self._options = GuiOptions()
+104:        self._worker: Optional[ProcessingWorker] = None
+105:        self._build_ui()
+106:        self._connect_signals()
+107:        self._apply_styles()
+108:
+109:    # ------------------------------------------------------------------ #
+110:    # UI construction
+111:    # ------------------------------------------------------------------ #
+112:    def _build_ui(self) -> None:
+113:        central = QWidget(self)
+114:        central_layout = QVBoxLayout(central)
+115:        central_layout.setContentsMargins(24, 24, 24, 24)
+116:        central_layout.setSpacing(16)
+117:
+118:        central_layout.addWidget(self._build_header_section())
+119:        central_layout.addWidget(self._build_info_section())
+120:        central_layout.addWidget(self._build_file_section())
+121:        central_layout.addWidget(self._build_option_section())
+122:        central_layout.addWidget(self._build_action_section())
+123:        central_layout.addWidget(self._build_progress_section())
+124:        central_layout.addWidget(self._build_log_section(), 1)
+125:        central_layout.addWidget(self._build_footer_input())
+126:
+127:        self.setCentralWidget(central)
+128:
+129:    def _build_header_section(self) -> QWidget:
+130:        container = QFrame()
+131:        layout = QVBoxLayout(container)
+132:        layout.setSpacing(6)
+133:
+134:        title = QLabel("AMEX AI")
+135:        title.setObjectName("app-title")
+136:        subtitle = QLabel("?��? 문서 변??AI Copilot")
+137:        subtitle.setObjectName("app-subtitle")
+138:
+139:        mode_layout = QHBoxLayout()
+140:        self.mode_ai_btn = QPushButton("AI ?�업")
+141:        self.mode_ai_btn.setCheckable(True)
+142:        self.mode_ai_btn.setChecked(True)
+143:        self.mode_tool_btn = QPushButton("?�구")
+144:        self.mode_tool_btn.setCheckable(True)
+145:        mode_layout.addWidget(self.mode_ai_btn)
+146:        mode_layout.addWidget(self.mode_tool_btn)
+147:        mode_layout.addStretch()
+148:
+149:        layout.addWidget(title)
+150:        layout.addWidget(subtitle)
+151:        layout.addLayout(mode_layout)
+152:        return container
+153:
+154:    def _build_info_section(self) -> QWidget:
+155:        frame, body = self._create_card("?�작 ?�내")
+156:
+157:        info1 = QLabel("??AMEX AI???�동 방식")
+158:        info2 = QLabel("?�� ?�렇�??�용?�보?�요")
+159:        info3 = QLabel("???�용 방법 ?�상 보기")
+160:        for lbl in (info1, info2, info3):
+161:            lbl.setObjectName("info-label")
+162:            body.addWidget(lbl)
+163:        hint = QLabel("?�� 문서�??�결?�고 ?�업???�청?�보?�요")
+164:        hint.setObjectName("hint-label")
+165:        body.addWidget(hint)
+166:        return frame
+167:
+168:    def _build_file_section(self) -> QWidget:
+169:        frame, body = self._create_card("문서 ?�택")
+170:
+171:        self.select_button = QPushButton("PDF / ?��?지 불러?�기")
+172:        self.select_button.setCursor(Qt.PointingHandCursor)
+173:        self.file_summary_label = QLabel("?�택???�일 ?�음")
+174:        self.file_summary_label.setObjectName("summary-label")
+175:
+176:        self.file_list = QListWidget()
+177:        self.file_list.setSelectionMode(QListWidget.ExtendedSelection)
+178:        self.file_list.setMaximumHeight(100)
+179:
+180:        body.addWidget(self.select_button)
+181:        body.addWidget(self.file_summary_label)
+182:        body.addWidget(self.file_list)
+183:        return frame
+184:
+185:    def _build_option_section(self) -> QWidget:
+186:        frame, body = self._create_card("?�업 ?�션")
+187:
+188:        # Content mode radios
+189:        radio_container = QFrame()
+190:        radio_layout = QVBoxLayout(radio_container)
+191:        radio_layout.setContentsMargins(0, 0, 0, 0)
+192:
+193:        self.mode_text = QRadioButton("?�스?�만")
+194:        self.mode_text_equations = QRadioButton("?�스??+ ?�식")
+195:        self.mode_full = QRadioButton("?�스??+ ?�식 + ?��?지")
+196:        self.mode_full.setChecked(True)
+197:
+198:        for btn in (self.mode_text, self.mode_text_equations, self.mode_full):
+199:            radio_layout.addWidget(btn)
+200:
+201:        # OCR combo
+202:        ocr_layout = QHBoxLayout()
+203:        ocr_label = QLabel("OCR 모드")
+204:        self.ocr_combo = QComboBox()
+205:        self.ocr_combo.addItems(
+206:            [
+207:                "Pix2Text (기본)",
+208:                "Pix2Text + pix2tex (?�식 강화)",
+209:                "?�스?�만 (빠른 ?�스??",
+210:            ]
+211:        )
+212:        ocr_layout.addWidget(ocr_label)
+213:        ocr_layout.addWidget(self.ocr_combo)
+214:
+215:        body.addWidget(radio_container)
+216:        body.addLayout(ocr_layout)
+217:        return frame
+218:
+219:    def _build_action_section(self) -> QWidget:
+220:        frame, body = self._create_card("?�행")
+221:
+222:        self.start_button = QPushButton("?��?�??�송 ?�작")
+223:        self.start_button.setObjectName("primary-action")
+224:        self.always_on_top_btn = QPushButton("??�� ?�에 고정")
+225:        self.always_on_top_btn.setCheckable(True)
+226:
+227:        buttons = QHBoxLayout()
+228:        buttons.addWidget(self.start_button)
+229:        buttons.addWidget(self.always_on_top_btn)
+230:
+231:        body.addLayout(buttons)
+232:        return frame
+233:
+234:    def _build_progress_section(self) -> QWidget:
+235:        frame, body = self._create_card("진행 ?�황")
+236:        self.progress_bar = QProgressBar()
+237:        self.progress_bar.setRange(0, 100)
+238:        self.progress_label = QLabel("?��?�?)
+239:        body.addWidget(self.progress_bar)
+240:        body.addWidget(self.progress_label)
+241:        return frame
+242:
+243:    def _build_log_section(self) -> QWidget:
+244:        frame, body = self._create_card("로그 / 채팅")
+245:        self.log_output = QTextEdit()
+246:        self.log_output.setReadOnly(True)
+247:        self.log_output.setMinimumHeight(180)
+248:        self.log_output.setPlaceholderText("진행 ?�황???�기???�시?�니??")
+249:        body.addWidget(self.log_output)
+250:        return frame
+251:
+252:    def _build_footer_input(self) -> QWidget:
+253:        frame = QFrame()
+254:        layout = QHBoxLayout(frame)
+255:        layout.setContentsMargins(12, 12, 12, 12)
+256:        layout.setSpacing(8)
+257:
+258:        self.request_input = QLineEdit()
+259:        self.request_input.setPlaceholderText("무엇?�든 ?�성?�세??")
+260:        self.send_button = QPushButton("보내�?)
+261:        self.send_button.setCursor(Qt.PointingHandCursor)
+262:
+263:        layout.addWidget(self.request_input, 1)
+264:        layout.addWidget(self.send_button)
+265:        return frame
+266:
+267:    def _create_card(self, title: str) -> tuple[QWidget, QVBoxLayout]:
+268:        frame = QFrame()
+269:        frame.setObjectName("card")
+270:        layout = QVBoxLayout(frame)
+271:        layout.setContentsMargins(18, 18, 18, 18)
+272:        layout.setSpacing(12)
+273:
+274:        title_label = QLabel(title)
+275:        title_label.setObjectName("card-title")
+276:        body_layout = QVBoxLayout()
+277:        body_layout.setContentsMargins(0, 0, 0, 0)
+278:        body_layout.setSpacing(8)
+279:
+280:        layout.addWidget(title_label)
+281:        layout.addLayout(body_layout)
+282:        return frame, body_layout
+283:
+284:    def _apply_styles(self) -> None:
+285:        self.setStyleSheet(
+286:            """
+287:            QWidget {
+288:                background-color: #f7f7fb;
+289:                color: #222;
+290:                font-family: 'Pretendard', 'Segoe UI', sans-serif;
+291:                font-size: 13px;
+292:            }
+293:            #card {
+294:                background-color: #fff;
+295:                border-radius: 16px;
+296:                border: 1px solid #ececf0;
+297:            }
+298:            #card-title {
+299:                font-weight: 600;
+300:                font-size: 14px;
+301:            }
+302:            #app-title {
+303:                font-size: 20px;
+304:                font-weight: 700;
+305:            }
+306:            #app-subtitle {
+307:                color: #6b6b75;
+308:            }
+309:            QPushButton {
+310:                border-radius: 12px;
+311:                padding: 10px 18px;
+312:                background-color: #f0f0f5;
+313:                border: 1px solid #dedee5;
+314:            }
+315:            QPushButton:hover {
+316:                background-color: #e6e6ef;
+317:            }
+318:            QPushButton:checked {
+319:                background-color: #d8ebff;
+320:                border: 1px solid #76b7ff;
+321:            }
+322:            QPushButton#primary-action {
+323:                background-color: #2b72ff;
+324:                color: white;
+325:                border: none;
+326:            }
+327:            QPushButton#primary-action:disabled {
+328:                background-color: #a7c5ff;
+329:            }
+330:            QListWidget {
+331:                border: 1px dashed #d4d4de;
+332:                border-radius: 10px;
+333:                background-color: #fafafa;
+334:            }
+335:            QTextEdit {
+336:                border: 1px solid #e2e2eb;
+337:                border-radius: 12px;
+338:                padding: 8px;
+339:                background-color: white;
+340:            }
+341:            QLineEdit {
+342:                border: 1px solid #dcdce3;
+343:                border-radius: 12px;
+344:                padding: 10px 12px;
+345:                background-color: white;
+346:            }
+347:            #info-label {
+348:                background-color: #f4f6fb;
+349:                border-radius: 10px;
+350:                padding: 8px 12px;
+351:            }
+352:            #hint-label {
+353:                color: #585a66;
+354:                padding-top: 6px;
+355:            }
+356:            #summary-label {
+357:                color: #5d5f6c;
+358:            }
+359:            """
+360:        )
+361:
+362:    # ------------------------------------------------------------------ #
+363:    # Signal wiring
+364:    # ------------------------------------------------------------------ #
+365:    def _connect_signals(self) -> None:
+366:        self.select_button.clicked.connect(self._handle_select_files)
+367:        self.start_button.clicked.connect(self._handle_start_clicked)
+368:        self.send_button.clicked.connect(self._handle_start_clicked)
+369:        self.always_on_top_btn.toggled.connect(self._toggle_always_on_top)
+370:        self.start_processing_requested.connect(self._kickoff_processing)
+371:
+372:    # ------------------------------------------------------------------ #
+373:    # Event handlers
+374:    # ------------------------------------------------------------------ #
+375:    def _handle_select_files(self) -> None:
+376:        dialog = QFileDialog(self)
+377:        dialog.setFileMode(QFileDialog.ExistingFiles)
+378:        dialog.setNameFilters(
+379:            [
+380:                "PDF files (*.pdf)",
+381:                "?��?지 ?�일 (*.png *.jpg *.jpeg *.bmp)",
+382:                "모든 ?�일 (*)",
+383:            ]
+384:        )
+385:        if dialog.exec() != QFileDialog.Accepted:
+386:            return
+387:
+388:        added = 0
+389:        for path in dialog.selectedFiles():
+390:            if not self._list_contains_path(path):
+391:                QListWidgetItem(path, self.file_list)
+392:                added += 1
+393:
+394:        self.file_summary_label.setText(f"{self.file_list.count()}�??�택??)
+395:        self._append_log(f"{added}�??�일 추�???")
+396:
+397:    def _handle_start_clicked(self) -> None:
+398:        files = self._gather_files()
+399:        if not files:
+400:            QMessageBox.warning(self, "?�일 ?�음", "먼�? PDF???��?지�??�택?�세??")
+401:            return
+402:
+403:        options = self._collect_options()
+404:        request = self.request_input.text().strip()
+405:        if request:
+406:            self._append_log(f"?�청 메모: {request}")
+407:        self.request_input.clear()
+408:
+409:        self._append_log(
+410:            f"처리 ?�작: ?�일 {len(files)}�?/ 모드={options.content_mode.name} / OCR={options.ocr_mode}"
+411:        )
+412:        self.start_processing_requested.emit(
+413:            files,
+414:            GuiOptions(content_mode=options.content_mode, ocr_mode=options.ocr_mode),
+415:        )
+416:
+417:    def _kickoff_processing(self, files: List[str], options: GuiOptions) -> None:
+418:        if self._worker and self._worker.isRunning():
+419:            QMessageBox.information(self, "진행 �?, "?��? 문서�?처리?�고 ?�습?�다.")
+420:            return
+421:
+422:        self._worker = ProcessingWorker(files, options, self)
+423:        self._worker.log_signal.connect(self._append_log)
+424:        self._worker.error_signal.connect(self._handle_worker_error)
+425:        self._worker.finished.connect(self._handle_worker_finished)
+426:        self._worker.progress_signal.connect(self._handle_progress)
+427:
+428:        self.start_button.setEnabled(False)
+429:        self.send_button.setEnabled(False)
+430:        self.progress_bar.setValue(0)
+431:        self.progress_label.setText("?��? ?�동???�작??)
+432:        self._worker.start()
+433:
+434:    def _handle_worker_error(self, message: str) -> None:
+435:        self._append_log(f"[?�류] {message}")
+436:        QMessageBox.critical(self, "처리 ?�류", message)
+437:        self.start_button.setEnabled(True)
+438:        self.send_button.setEnabled(True)
+439:        self.progress_label.setText("?�류 발생")
+440:        self.progress_bar.setValue(0)
+441:
+442:    def _handle_worker_finished(self) -> None:
+443:        self.start_button.setEnabled(True)
+444:        self.send_button.setEnabled(True)
+445:        self._append_log("모든 ?�업???�료?�었?�니??")
+446:        self.progress_label.setText("?�료")
+447:
+448:    def _handle_progress(self, current: int, total: int, message: str) -> None:
+449:        percent = int((current / total) * 100) if total else 0
+450:        self.progress_bar.setValue(percent)
+451:        self.progress_label.setText(message)
+452:
+453:    def _toggle_always_on_top(self, checked: bool) -> None:
+454:        flags = self.windowFlags()
+455:        if checked:
+456:            self.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+457:        else:
+458:            self.setWindowFlag(Qt.WindowStaysOnTopHint, False)
+459:        self.show()
+460:
+461:    # ------------------------------------------------------------------ #
+462:    # Helpers
+463:    # ------------------------------------------------------------------ #
+464:    def _gather_files(self) -> List[str]:
+465:        return [self.file_list.item(i).text() for i in range(self.file_list.count())]
+466:
+467:    def _collect_options(self) -> GuiOptions:
+468:        mode = ContentMode.TEXT_EQUATIONS_IMAGES
+469:        if self.mode_text.isChecked():
+470:            mode = ContentMode.TEXT
+471:        elif self.mode_text_equations.isChecked():
+472:            mode = ContentMode.TEXT_EQUATIONS
+473:        self._options = GuiOptions(content_mode=mode, ocr_mode=self.ocr_combo.currentText())
+474:        return self._options
+475:
+476:    def _list_contains_path(self, path: str) -> bool:
+477:        for i in range(self.file_list.count()):
+478:            if self.file_list.item(i).text() == path:
+479:                return True
+480:        return False
+481:
+482:    def _append_log(self, text: str) -> None:
+483:        self.log_output.append(text)
+484:
+485:
+486:def run_app() -> None:
+487:    """
+488:    Convenience launcher so we can run `python -m gui.app`.
+489:    """
+490:    app = QApplication.instance() or QApplication([])
+491:    window = MainWindow()
+492:    window.show()
+493:    app.exec()
+494:

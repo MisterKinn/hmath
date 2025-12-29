@@ -1,0 +1,396 @@
+QWidget {
+    background-color: #000000;
+    color: #e8e8e8;
+    font-family: 'Pretendard', 'Pretendard Variable', 'SF Pro Display', 'Segoe UI', sans-serif;
+    font-size: 14px;
+}
+
+#main-area {
+    background-color: #000000;
+}
+
+#sidebar {
+    background-color: #0a0a0a;
+    border-left: 1px solid #333333;
+}
+
+QToolButton#pin-button {
+    border: none;
+    color: #999;
+    padding: 8px;
+    border-radius: 8px;
+    background-color: transparent;
+    font-size: 18px;
+}
+
+QToolButton#pin-button:hover {
+    background-color: #2a2a2a;
+}
+
+QToolButton#pin-button:checked {
+    color: #5377f6;
+    background-color: transparent;
+}
+
+#app-title {
+    font-size: 32px;
+    font-weight: 700;
+    color: #f0f0f0;
+    letter-spacing: -0.5px;
+}
+
+#app-subtitle {
+    font-size: 14px;
+    color: #999;
+    font-weight: 400;
+}
+
+#templates-container {
+    background-color: transparent;
+}
+
+/* Ensure drawer action spacing matches light theme for layout parity */
+QPushButton#drawer-action {
+    background-color: transparent;
+    border: none;
+    text-align: left;
+    padding: 12px 10px;
+    font-size: 16px;
+    font-weight: 800;
+    color: #e8e8e8;
+    border-radius: 10px;
+    min-height: 48px;
+}
+QPushButton#drawer-action:hover { background-color: #1a1a1a; }
+
+QLabel#drawer-section-title { color: #9ca3af; font-weight: 700; margin-left: 6px; margin-top: 6px; }
+
+QWidget#drawer-profile-wrap { border-top: 1px solid #000000; padding-top: 12px; }
+QFrame#drawer-divider { border: none; background: transparent; }
+
+QLabel#drawer-avatar { background-color: #2b7bf6; color: #ffffff; border-radius: 20px; font-weight: 800; font-size: 16px; }
+
+/* Chat list items - keep alignment and hover styling consistent with light theme, but use dark hover background */
+QWidget#drawer-chat-list QWidget#drawer-chat-item-wrap { padding: 0px 2px; }
+QPushButton#drawer-chat-item {
+    background: transparent;
+    border: none;
+    text-align: left;
+    padding: 8px 8px;
+    font-size: 14px;
+    font-weight: 700;
+    color: #e8e8e8;
+    border-radius: 10px;
+}
+QPushButton#drawer-chat-item[active="true"] {
+    /* active background should be slightly lighter than hover */
+    background-color: #1f1f1f;
+    border-radius: 12px;
+    padding-left: 12px;
+}
+
+/* Hover state: use black background */
+QWidget#drawer-chat-list QWidget#drawer-chat-item-wrap:hover QPushButton#drawer-chat-item,
+QPushButton#drawer-chat-item:hover {
+    background-color: #000000;
+    border-radius: 12px;
+}
+
+QToolButton#drawer-chat-delete {
+    background-color: #2a2a2a;
+    border-radius: 6px;
+    min-width: 28px;
+    min-height: 28px;
+    color: #9ca3af;
+    visibility: hidden;
+    font-size: 13px;
+}
+QWidget#drawer-chat-list QWidget#drawer-chat-item-wrap:hover QToolButton#drawer-chat-delete { visibility: visible; }
+
+/* Edit button styling for dark theme */
+QToolButton#drawer-chat-edit {
+    background-color: transparent;
+    border-radius: 6px;
+    min-width: 28px;
+    min-height: 28px;
+    color: #bfc7cf;
+    border: none;
+    visibility: hidden;
+    font-size: 13px;
+}
+QWidget#drawer-chat-list QWidget#drawer-chat-item-wrap:hover QToolButton#drawer-chat-edit { visibility: visible; color: #bfc7cf; }
+QToolButton#drawer-chat-edit:hover { background-color: #1a1a1a; color: #ffffff; border-radius: 6px; }
+
+#template-btn {
+    background-color: #1a1a1a;
+    border: 1px solid #4a4a4a;
+    border-radius: 8px;
+    padding: 8px 12px;
+    color: #e8e8e8;
+    font-size: 13px;
+    font-weight: 500;
+    qproperty-iconSize: 16px 16px;
+}
+
+#template-btn:hover {
+    background-color: #2a2a2a;
+    border-color: #5377f6;
+}
+
+QPushButton#help-button {
+    background-color: #14161d;
+    border: 1px solid #3b4a6a;
+    border-radius: 10px;
+    padding: 8px 14px;
+    color: #e9ecf5;
+    font-size: 13px;
+    font-weight: 600;
+    qproperty-iconSize: 20px 20px;
+}
+
+QPushButton#help-button:hover {
+    background-color: #1c2333;
+    border-color: #6d8af7;
+}
+
+QPushButton#help-button:pressed {
+    background-color: #13192a;
+    border-color: #4f6ad7;
+}
+
+#input-container {
+    background-color: #000000;
+}
+
+#script-input-container {
+    background-color: #1a1a1a;
+    border: 1px solid #4a4a4a;
+    border-radius: 12px;
+}
+
+QTextEdit#script-editor {
+    background-color: transparent;
+    border: none;
+    border-radius: 0px;
+    padding: 0px;
+    color: #e8e8e8;
+    font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+    font-size: 13px;
+    line-height: 1.6;
+}
+
+QTextEdit#script-editor:focus {
+    border: none;
+    padding: 0px;
+}
+
+QPushButton#primary-action {
+    background-color: #5377f6;
+    color: #ffffff;
+    border: none;
+    border-radius: 8px;
+    padding: 10px 24px;
+    font-size: 14px;
+    font-weight: 600;
+}
+
+/* Top-left hamburger toggle (icon-only, no background) */
+QToolButton#drawer-toggle {
+    background-color: transparent;
+    color: #e8e8e8;
+    border: none;
+    border-radius: 0;
+    min-width: 36px;
+    min-height: 36px;
+    /* small left/top offset so openbtn(-dark).png aligns visually */
+    padding: 4px 0 0 6px;
+}
+QToolButton#drawer-toggle:hover {
+    background-color: transparent;
+}
+
+/* Custom scroll bar styling (dark theme) */
+QScrollBar:vertical {
+    background: transparent;
+    width: 10px;
+    margin: 8px 0 8px 0;
+}
+QScrollBar::handle:vertical {
+    background: #ffffff; /* white handle as requested */
+    min-height: 24px;
+    border-radius: 6px;
+    border: 2px solid rgba(255,255,255,0.08);
+}
+QScrollBar::handle:vertical:hover {
+    background: #f3f4f6;
+}
+QScrollBar::add-line, QScrollBar::sub-line, QScrollBar::add-page, QScrollBar::sub-page {
+    background: none; border: none; height: 0px;
+}
+QScrollBar:horizontal {
+    background: transparent;
+    height: 10px;
+}
+QScrollBar::handle:horizontal {
+    background: #ffffff;
+    min-width: 24px;
+    border-radius: 6px;
+    border: 2px solid rgba(255,255,255,0.08);
+}
+
+QPushButton#primary-action:hover {
+    background-color: #3e5fc7;
+}
+
+QPushButton#primary-action:pressed {
+    background-color: #2e47a0;
+}
+
+QPushButton#primary-action:disabled {
+    background-color: #666666;
+}
+
+#log-output {
+    background-color: transparent;
+    border: 1px solid #4a4a4a;
+    border-radius: 8px;
+    padding: 12px;
+    color: #ffffff !important;
+    font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+    font-size: 12px;
+    line-height: 2.5;
+}
+
+#log-output:focus {
+    border: 2px solid #5377f6;
+    padding: 11px;
+}
+
+QPushButton#upload-button {
+    background-color: transparent;
+    border: none;
+    border-radius: 8px;
+    padding: 0px;
+    color: #e8e8e8;
+    font-size: 18px;
+    font-weight: 500;
+    min-width: 44px;
+    min-height: 44px;
+    max-width: 44px;
+    max-height: 44px;
+}
+
+QPushButton#upload-button:hover {
+    background-color: #2a2a2a;
+    border: none;
+}
+
+QPushButton#upload-button:pressed {
+    background-color: #1a1a1a;
+}
+
+QPushButton#help-button {
+    background-color: transparent;
+    border: none;
+    border-radius: 8px;
+    padding: 0px 12px;
+    color: #e8e8e8;
+    font-size: 13px;
+    font-weight: 500;
+}
+#success-indicator {
+    color: #5377f6;
+    font-size: 24px;
+}
+
+/* Scrollbar styling for dark theme */
+QScrollBar:vertical {
+    background-color: transparent;
+    width: 12px;
+    margin: 0px;
+}
+
+QScrollBar::handle:vertical {
+    background-color: #ffffff;
+    border-radius: 6px;
+    min-height: 20px;
+    margin: 2px 2px 2px 2px;
+}
+
+QScrollBar::handle:vertical:hover {
+    background-color: #ffffff;
+}
+
+QScrollBar::handle:vertical:pressed {
+    background-color: #ffffff;
+}
+
+QScrollBar::up-arrow:vertical {
+    background-color: transparent;
+}
+
+QScrollBar::down-arrow:vertical {
+    background-color: transparent;
+}
+
+QScrollBar::add-line:vertical {
+    background-color: transparent;
+}
+
+QScrollBar::sub-line:vertical {
+    background-color: transparent;
+}
+
+QScrollBar::add-page:vertical {
+    background-color: transparent;
+}
+
+QScrollBar::sub-page:vertical {
+    background-color: transparent;
+}
+
+QScrollBar:horizontal {
+    background-color: transparent;
+    height: 12px;
+    margin: 0px;
+}
+
+QScrollBar::handle:horizontal {
+    background-color: #ffffff;
+    border-radius: 6px;
+    min-width: 20px;
+    margin: 2px 2px 2px 2px;
+}
+
+QScrollBar::handle:horizontal:hover {
+    background-color: #ffffff;
+}
+
+QScrollBar::handle:horizontal:pressed {
+    background-color: #ffffff;
+}
+
+QScrollBar::left-arrow:horizontal {
+    background-color: transparent;
+}
+
+QScrollBar::right-arrow:horizontal {
+    background-color: transparent;
+}
+
+QScrollBar::add-line:horizontal {
+    background-color: transparent;
+}
+
+QScrollBar::sub-line:horizontal {
+    background-color: transparent;
+}
+
+QScrollBar::add-page:horizontal {
+    background-color: transparent;
+}
+
+QScrollBar::sub-page:horizontal {
+    background-color: transparent;
+}
+
