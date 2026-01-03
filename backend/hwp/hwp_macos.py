@@ -190,14 +190,13 @@ class HwpMacOS:
         """
         try:
             self.activate()
-            delay = 0.3
             
             script = f'''
             tell application "{self._app_name}"
                 activate
             end tell
             
-            delay {delay}
+            delay 0.2
             
             tell application "System Events"
                 tell process "{self._app_name}"
@@ -290,21 +289,21 @@ class HwpMacOS:
             # Escape special characters for AppleScript
             escaped_text = text.replace('\\', '\\\\').replace('"', '\\"')
             
-            # Build close command with popup handling
+            # Build close command with popup handling (faster delays)
             close_commands = ""
             if close_window:
                 close_commands = '''
                     -- Close window with Escape
                     key code 53
-                    delay 1.0
+                    delay 0.5
                     
-                    -- Click "넣기" button in popup
+                    -- Click "넣기" button in popup (fast!)
                     try
                         click button "넣기" of window 1
-                        delay 0.3
+                        delay 0.1
                     on error
                         -- If popup doesn't appear or button not found, just continue
-                        delay 0.1
+                        delay 0.05
                     end try
 '''
             
@@ -313,7 +312,7 @@ class HwpMacOS:
                 activate
             end tell
             
-            delay 0.3
+            delay 0.2
             
             tell application "System Events"
                 tell process "{self._app_name}"
@@ -324,11 +323,11 @@ class HwpMacOS:
                         if role of elem is "AXScrollArea" then
                             -- Focus on the scroll area (bottom input area)
                             set focused of elem to true
-                            delay 0.3
+                            delay 0.2
                             
                             -- Type text in the bottom input area
                             keystroke "{escaped_text}"
-                            delay 0.5
+                            delay 0.3
                             {close_commands}
                             return "SUCCESS: Typed and inserted"
                         end if
@@ -368,9 +367,9 @@ class HwpMacOS:
             logger.info("Step 1: Opening formula editor window...")
             self.open_formula_editor()
             
-            # Step 2: Wait for window to fully open
+            # Step 2: Wait for window to fully open (faster!)
             import time
-            time.sleep(1.5)
+            time.sleep(1.0)  # Reduced from 1.5s to 1.0s
             logger.info("Step 2: Window opened, ready to type...")
             
             # Step 3: Type text in the open window

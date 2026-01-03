@@ -49,6 +49,48 @@ from backend.chatgpt_helper import ChatGPTHelper
 from backend.backup_manager import BackupManager
 
 
+class FileDropTextEdit(QTextEdit):
+    """Custom QTextEdit that forwards file drops to parent window instead of inserting file paths."""
+    
+    file_dropped = Signal(str)  # Signal to emit when file is dropped
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+    
+    def dragEnterEvent(self, event):
+        """Accept file drops but don't process them here."""
+        if event.mimeData().hasUrls():
+            # Check if any URL is an image or PDF
+            for url in event.mimeData().urls():
+                file_path = url.toLocalFile()
+                if file_path.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.pdf')):
+                    event.acceptProposedAction()
+                    return
+        # For non-file drops (like text), use default behavior
+        super().dragEnterEvent(event)
+    
+    def dragMoveEvent(self, event):
+        """Accept drag move for files."""
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            super().dragMoveEvent(event)
+    
+    def dropEvent(self, event):
+        """Handle file drops by forwarding to parent, not inserting paths."""
+        if event.mimeData().hasUrls():
+            for url in event.mimeData().urls():
+                file_path = url.toLocalFile()
+                if file_path.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.pdf')):
+                    # Emit signal instead of inserting text
+                    self.file_dropped.emit(file_path)
+                    event.acceptProposedAction()
+                    return
+        # For non-file drops (like text), use default behavior
+        super().dropEvent(event)
+
+
 class AIWorker(QObject):
     """Worker for running AI tasks in a separate thread."""
     finished = Signal(str)  # Emits the generated/optimized script
@@ -64,6 +106,7 @@ class AIWorker(QObject):
     def run(self):
         """Run the AI task."""
         import traceback
+        from pathlib import Path
         try:
             print(f"[AIWorker] Starting {self.task_type} task...")
             
@@ -73,11 +116,63 @@ class AIWorker(QObject):
             
             if self.task_type == "generate":
                 print(f"[AIWorker] Calling generate_script...")
-                result = self.chatgpt.generate_script(
-                    self.kwargs['description'],
-                    self.kwargs.get('context', ''),
-                    on_thought=on_thought
-                )
+                
+                # Check if we have multiple images to process
+                image_paths = self.kwargs.get('image_paths', [])
+                image_path = self.kwargs.get('image_path')  # Single image (legacy)
+                
+                if image_paths and len(image_paths) > 1:
+                    # Process multiple images
+                    print(f"[AIWorker] Processing {len(image_paths)} images")
+                    all_results = []
+                    
+                    for idx, img_path in enumerate(image_paths, 1):
+                        on_thought(f"파일 {idx}/{len(image_paths)} 분석 중: {Path(img_path).name}")
+                        
+                        desc = self.kwargs['description']
+                        if idx > 1:
+                            # For subsequent images, modify description
+                            desc = f"다음 파일을 분석합니다 (파일 {idx}/{len(image_paths)})"
+                        
+                        result = self.chatgpt.generate_script(
+                            desc,
+                            self.kwargs.get('context', ''),
+                            image_path=img_path,
+                            on_thought=on_thought
+                        )
+                        
+                        if result:
+                            all_results.append(result)
+                            print(f"[AIWorker] File {idx} processed: {len(result)} chars")
+                        else:
+                            print(f"[AIWorker] WARNING: File {idx} returned no result")
+                    
+                    # Combine all results with paragraph separators
+                    if all_results:
+                        # Extract CODE sections and combine
+                        combined_code = []
+                        for result in all_results:
+                            # Extract [CODE]...[/CODE] section
+                            import re
+                            match = re.search(r'\[CODE\](.*?)\[/CODE\]', result, re.DOTALL)
+                            if match:
+                                code = match.group(1).strip()
+                                combined_code.append(code)
+                        
+                        # Create combined result
+                        code_with_separators = '\ninsert_paragraph()\ninsert_paragraph()\n'.join(combined_code)
+                        result = f"[DESCRIPTION]\n모든 파일을 분석하여 내용을 추출했습니다.\n[/DESCRIPTION]\n\n[CODE]\n{code_with_separators}\n[/CODE]"
+                    else:
+                        result = None
+                else:
+                    # Single image or no image
+                    result = self.chatgpt.generate_script(
+                        self.kwargs['description'],
+                        self.kwargs.get('context', ''),
+                        image_path=image_path or (image_paths[0] if image_paths else None),
+                        on_thought=on_thought
+                    )
+                
                 print(f"[AIWorker] Generate result: {len(result) if result else 0} chars")
             elif self.task_type == "optimize":
                 print(f"[AIWorker] Calling optimize_script...")
@@ -246,6 +341,9 @@ class MainWindow(QMainWindow):
         self.setMinimumHeight(700)
         self._worker: Optional[ScriptWorker] = None
         self.sr_worker: Optional[SpeechRecognitionWorker] = None
+        # AI thread management - support multiple concurrent threads
+        self.ai_threads: list[QThread] = []  # List of active AI threads
+        self.ai_workers: list[AIWorker] = []  # List of active AI workers
         # Default to light theme (pure white background)
         self.dark_mode = False
         self.chatgpt = ChatGPTHelper()
@@ -284,9 +382,14 @@ class MainWindow(QMainWindow):
             self._load_persisted_state()
         except Exception:
             pass
+        # Ensure at least one default chat exists
+        self._ensure_default_chat()
         # Apply responsive UI tweaks immediately and on resize
         self._apply_responsive_layout()
         self._hwp_detection_timer.start(500)  # Check every 500ms
+        
+        # Enable drag and drop for images and PDFs
+        self.setAcceptDrops(True)
         
         # Check HWP status on startup (delayed to let window show first)
         QTimer.singleShot(500, self._check_hwp_on_startup)
@@ -309,6 +412,49 @@ class MainWindow(QMainWindow):
             pass
         # Proceed with normal close
         super().closeEvent(event)
+
+    def dragEnterEvent(self, event) -> None:
+        """Handle drag enter event for files."""
+        if event.mimeData().hasUrls():
+            # Check if any of the URLs are image or PDF files
+            for url in event.mimeData().urls():
+                file_path = url.toLocalFile()
+                if file_path.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.pdf')):
+                    event.acceptProposedAction()
+                    return
+        event.ignore()
+
+    def dragMoveEvent(self, event) -> None:
+        """Handle drag move event."""
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event) -> None:
+        """Handle drop event for image/PDF files - supports multiple files."""
+        if event.mimeData().hasUrls():
+            files_added = False
+            for url in event.mimeData().urls():
+                file_path = url.toLocalFile()
+                if file_path.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.pdf')):
+                    print(f"[MainWindow] File dropped: {file_path}")
+                    # Add to selected files and show preview
+                    if file_path not in self.selected_files:
+                        self.selected_files.append(file_path)
+                        self._add_image_preview(file_path)
+                        files_added = True
+            if files_added:
+                event.acceptProposedAction()
+                return
+        event.ignore()
+    
+    def _handle_file_drop_in_input(self, file_path: str) -> None:
+        """Handle file drop in the input text field - add to attachments instead of inserting path."""
+        print(f"[MainWindow] File dropped in input field: {file_path}")
+        if file_path not in self.selected_files:
+            self.selected_files.append(file_path)
+            self._add_image_preview(file_path)
 
     def _snapshot_current_chat(self) -> None:
         """Save brief snapshot of the currently active chat into the in-memory store.
@@ -376,6 +522,16 @@ class MainWindow(QMainWindow):
                 return
             import json
             data = json.loads(storage.read_text(encoding='utf-8'))
+            
+            # Load chats if available
+            if "chats" in data and isinstance(data["chats"], list):
+                self._chats = data["chats"]
+                print(f"[Persist] Loaded {len(self._chats)} chats from storage")
+            
+            # Load current chat ID
+            if "current" in data:
+                self._current_chat_id = data["current"]
+            
             # Try a couple of places for the model so we remain tolerant to schema changes
             model = data.get("model") or (data.get("settings") or {}).get("model")
             if model:
@@ -385,6 +541,32 @@ class MainWindow(QMainWindow):
                     pass
         except Exception as e:
             print(f"[Persist] Failed to load persisted state: {e}")
+
+    def _ensure_default_chat(self) -> None:
+        """Ensure at least one default chat exists on startup."""
+        try:
+            if len(self._chats) == 0:
+                # Create a default chat
+                import uuid
+                import time
+                new_id = str(uuid.uuid4())
+                now = time.time()
+                default_chat = {
+                    "id": new_id,
+                    "title": "New chat",
+                    "log": "",
+                    "script": DEFAULT_SCRIPT.strip(),
+                    "messages": [],
+                    "created_at": now,
+                    "updated_at": now,
+                }
+                self._chats.append(default_chat)
+                self._current_chat_id = new_id
+                print(f"[MainWindow] Created default chat: {new_id}")
+                # Render the chat list to show the new chat
+                self._render_chat_list()
+        except Exception as e:
+            print(f"[MainWindow] Error ensuring default chat: {e}")
 
     def _render_chat_list(self) -> None:
         """Render the simple chat list inside the drawer (if present)."""
@@ -800,16 +982,167 @@ class MainWindow(QMainWindow):
         try:
             for chat in self._chats:
                 if chat.get("id") == chat_id:
+                    # Save current chat's UI state before switching
+                    if self._current_chat_id:
+                        self._save_current_chat_state()
+                    
+                    # Switch to new chat
                     self._current_chat_id = chat_id
+                    
+                    # Restore script and log
                     if hasattr(self, "script_edit"):
                         self.script_edit.setPlainText(chat.get("script", ""))
                     if hasattr(self, "log_output"):
                         self.log_output.setPlainText(chat.get("log", ""))
+                    
+                    # Clear and restore chat transcript
+                    self._clear_chat_transcript()
+                    self._restore_chat_messages(chat)
+                    
                     self._render_chat_list()
                     self._set_drawer_open(False)
                     return
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[MainWindow] Error activating chat: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _save_current_chat_state(self) -> None:
+        """Save the current chat's UI state (messages, script, log) to the chat object."""
+        try:
+            for chat in self._chats:
+                if chat.get("id") == self._current_chat_id:
+                    # Save script and log
+                    if hasattr(self, "script_edit"):
+                        chat["script"] = self.script_edit.toPlainText()
+                    if hasattr(self, "log_output"):
+                        chat["log"] = self.log_output.toPlainText()
+                    
+                    # Save chat messages (excluding thinking animation)
+                    messages = []
+                    for role, row, bubble in self._chat_widgets:
+                        try:
+                            # Skip if this is a thinking/loading message
+                            html_text = bubble.text()
+                            if html_text and not html_text.startswith("Thinking"):
+                                # Convert HTML back to plain text
+                                plain_text = (
+                                    html_text
+                                    .replace("<br/>", "\n")
+                                    .replace("<br>", "\n")
+                                    .replace("&lt;", "<")
+                                    .replace("&gt;", ">")
+                                    .replace("&amp;", "&")
+                                )
+                                messages.append({"role": role, "content": plain_text})
+                        except Exception:
+                            pass
+                    chat["messages"] = messages
+                    print(f"[MainWindow] Saved {len(messages)} messages for chat {self._current_chat_id}")
+                    return
+        except Exception as e:
+            print(f"[MainWindow] Error saving chat state: {e}")
+
+    def _clear_chat_transcript(self) -> None:
+        """Clear all messages from the chat transcript UI."""
+        try:
+            # Remove all chat widgets
+            for role, row, bubble in self._chat_widgets:
+                try:
+                    self.chat_transcript_layout.removeWidget(row)
+                    row.deleteLater()
+                except Exception:
+                    pass
+            self._chat_widgets.clear()
+            
+            # Remove thinking widget if present
+            if self._thinking_widget:
+                try:
+                    row, bubble = self._thinking_widget
+                    self.chat_transcript_layout.removeWidget(row)
+                    row.deleteLater()
+                except Exception:
+                    pass
+                self._thinking_widget = None
+            
+            # Re-add stretch
+            self.chat_transcript_layout.addStretch(1)
+            print("[MainWindow] Chat transcript cleared")
+        except Exception as e:
+            print(f"[MainWindow] Error clearing chat transcript: {e}")
+
+    def _restore_chat_messages(self, chat: dict) -> None:
+        """Restore chat messages from the chat object to the UI."""
+        try:
+            messages = chat.get("messages", [])
+            print(f"[MainWindow] Restoring {len(messages)} messages for chat {chat.get('id')}")
+            for msg in messages:
+                role = msg.get("role", "user")
+                content = msg.get("content", "")
+                if content and role in ("user", "assistant", "system"):
+                    # Directly add to UI without saving again (to avoid duplication)
+                    self._add_message_to_ui_only(role, content)
+        except Exception as e:
+            print(f"[MainWindow] Error restoring chat messages: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _add_message_to_ui_only(self, role: str, text: str) -> None:
+        """Add a message to the UI without saving it to chat data (used for restoration)."""
+        try:
+            self._ensure_chat_transcript_visible()
+
+            # Remove the stretch spacer at the end, append, then add it back.
+            try:
+                if self.chat_transcript_layout.count() > 0:
+                    last_item = self.chat_transcript_layout.itemAt(self.chat_transcript_layout.count() - 1)
+                    if last_item and last_item.spacerItem():
+                        self.chat_transcript_layout.takeAt(self.chat_transcript_layout.count() - 1)
+            except Exception:
+                pass
+
+            row = QWidget()
+            row.setObjectName("chat-row")
+            row_lyt = QHBoxLayout(row)
+            row_lyt.setContentsMargins(0, 0, 0, 0)
+            row_lyt.setSpacing(0)
+
+            bubble = QLabel()
+            bubble.setObjectName("chat-bubble")
+            bubble.setWordWrap(True)
+            bubble.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            bubble.setTextFormat(Qt.TextFormat.RichText)
+            bubble.setMaximumWidth(520)
+
+            # Simple HTML escape + preserve newlines
+            safe = (
+                (text or "")
+                .replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace("\n", "<br/>")
+            )
+            bubble.setText(safe)
+            self._apply_chat_bubble_style(role, bubble)
+
+            if role == "user":
+                row_lyt.addStretch(1)
+                row_lyt.addWidget(bubble, 0, Qt.AlignmentFlag.AlignRight)
+            else:
+                row_lyt.addWidget(bubble, 0, Qt.AlignmentFlag.AlignLeft)
+                row_lyt.addStretch(1)
+
+            self.chat_transcript_layout.addWidget(row, 0)
+            self.chat_transcript_layout.addStretch(1)
+            self._chat_widgets.append((role, row, bubble))
+
+            # Scroll to bottom
+            try:
+                QTimer.singleShot(0, lambda: self.chat_scroll.verticalScrollBar().setValue(self.chat_scroll.verticalScrollBar().maximum()))
+            except Exception:
+                pass
+        except Exception as e:
+            print(f"[MainWindow] Error adding message to UI: {e}")
 
     def _apply_button_icon(
         self,
@@ -1079,12 +1412,14 @@ class MainWindow(QMainWindow):
         script_layout.setSpacing(12)
         
         # Natural language input field (changed from code editor to chat-like input)
-        self.script_edit = QTextEdit()
+        self.script_edit = FileDropTextEdit()
         self.script_edit.setObjectName("script-editor")
         self.script_edit.setPlaceholderText("무엇을 하고 싶으신가요? (예: '수학 문제'라는 제목을 입력하고 이차방정식 공식을 삽입해줘)")
         self.script_edit.setPlainText("")  # Start with empty input
         # Smaller editor height to reduce overall input form height.
         self.script_edit.setMaximumHeight(220)
+        # Connect file drop signal
+        self.script_edit.file_dropped.connect(self._handle_file_drop_in_input)
         self.script_edit.setMinimumHeight(140)
         # Custom context menu in Korean
         self.script_edit.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -3075,20 +3410,22 @@ class MainWindow(QMainWindow):
             self.script_edit.setPlainText(current + "\n" + img_ref)
 
     def _handle_add_file(self) -> None:
-        """Handle combined file/image upload button click."""
-        file_path, _ = QFileDialog.getOpenFileName(
+        """Handle combined file/image upload button click - supports multiple selections."""
+        file_paths, _ = QFileDialog.getOpenFileNames(  # Changed to getOpenFileNames for multiple selection
             self,
-            "파일 또는 이미지 선택",
+            "파일 또는 이미지 선택 (여러 개 선택 가능)",
             "",
-            "All Files (*)"
+            "이미지 파일 (*.png *.jpg *.jpeg *.gif *.bmp);;PDF 파일 (*.pdf);;모든 파일 (*)"
         )
-        if file_path:
-            # Insert file path reference into script
-            file_ref = f'insert_image("{file_path}")'
-            current = self.script_edit.toPlainText()
-            self.script_edit.setPlainText(current + "\n" + file_ref)
-            self._append_log(f"파일 추가됨: {Path(file_path).name}")
-            self._add_image_preview(file_path)
+        if file_paths:
+            for file_path in file_paths:
+                # Store the uploaded file path for AI to use
+                if file_path not in self.selected_files:
+                    self.selected_files.append(file_path)
+                    self._add_image_preview(file_path)
+                    self._append_log(f"📎 파일 추가됨: {Path(file_path).name}")
+                    print(f"[MainWindow] File uploaded and added to selected_files: {file_path}")
+
             
             # Update HWP filename if it's a document
             filename = Path(file_path).name
@@ -3096,29 +3433,98 @@ class MainWindow(QMainWindow):
                 self.hwp_filename_label.setText(filename)
 
     def _add_image_preview(self, file_path: str) -> None:
-        """Add image preview thumbnail."""
+        """Add image preview thumbnail with remove button at top-right corner."""
         try:
             pixmap = QPixmap(file_path)
             if not pixmap.isNull():
-                # Scale to higher-quality thumbnail size
-                scaled = pixmap.scaled(120, 120, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                # Create container for preview
+                preview_container = QFrame()
+                preview_container.setObjectName("image-preview-item")
+                preview_container.setFixedSize(130, 155)  # Fixed size container
                 
-                # Create preview label
-                preview_label = QLabel()
+                # Use absolute positioning for overlaying close button
+                preview_container.setStyleSheet("""
+                    QFrame#image-preview-item {
+                        background-color: transparent;
+                    }
+                """)
+                
+                # Create image label
+                preview_label = QLabel(preview_container)
+                scaled = pixmap.scaled(120, 120, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
                 preview_label.setPixmap(scaled)
                 preview_label.setFixedSize(120, 120)
-                preview_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
+                preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 preview_label.setStyleSheet("""
                     border: 2px solid #ddd;
                     border-radius: 8px;
                     padding: 2px;
                     background-color: white;
                 """)
+                preview_label.move(5, 0)
                 
-                self.image_preview_layout.addWidget(preview_label, alignment=Qt.AlignmentFlag.AlignLeft)
+                # Create filename label
+                filename = Path(file_path).name
+                if len(filename) > 15:
+                    filename = filename[:12] + "..."
+                filename_label = QLabel(filename, preview_container)
+                filename_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                filename_label.setStyleSheet("""
+                    font-size: 10px;
+                    color: #666;
+                    background-color: transparent;
+                """)
+                filename_label.setFixedWidth(120)
+                filename_label.move(5, 125)
+                
+                # Create remove button at top-right corner (overlaid)
+                remove_btn = QPushButton("✕", preview_container)
+                remove_btn.setFixedSize(20, 20)
+                remove_btn.setStyleSheet("""
+                    QPushButton {
+                        background-color: rgba(0, 0, 0, 0.6);
+                        color: white;
+                        border: none;
+                        border-radius: 10px;
+                        font-weight: bold;
+                        font-size: 12px;
+                    }
+                    QPushButton:hover {
+                        background-color: rgba(0, 0, 0, 0.8);
+                    }
+                """)
+                remove_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                # Use default argument to capture file_path correctly (avoid late binding issue)
+                remove_btn.clicked.connect(lambda checked=False, fp=file_path, widget=preview_container: self._remove_image_preview(fp, widget))
+                # Position at top-right corner of the image (moved higher)
+                remove_btn.move(107, -1)
+                remove_btn.raise_()  # Bring to front
+                
+                # Store file path as property for later removal
+                preview_container.setProperty("file_path", file_path)
+                
+                self.image_preview_layout.addWidget(preview_container, alignment=Qt.AlignmentFlag.AlignLeft)
                 self.image_preview_container.show()
         except Exception as e:
             print(f"Error adding image preview: {e}")
+    
+    def _remove_image_preview(self, file_path: str, preview_widget: QWidget) -> None:
+        """Remove an image preview and its associated file from selected_files."""
+        try:
+            # Remove from selected files list
+            if file_path in self.selected_files:
+                self.selected_files.remove(file_path)
+                print(f"[MainWindow] File removed: {file_path}")
+            
+            # Remove the preview widget
+            self.image_preview_layout.removeWidget(preview_widget)
+            preview_widget.deleteLater()
+            
+            # Hide container if no more previews
+            if len(self.selected_files) == 0:
+                self.image_preview_container.hide()
+        except Exception as e:
+            print(f"Error removing image preview: {e}")
 
     def _set_model(self, model_name: str) -> None:
         """Set the active model and update UI labels."""
@@ -4462,11 +4868,28 @@ class MainWindow(QMainWindow):
         self.chat_transcript_layout.addStretch(1)
         self._chat_widgets.append((role, row, bubble))
 
+        # Save message to current chat
+        self._save_message_to_current_chat(role, text)
+
         # Scroll to bottom
         try:
             QTimer.singleShot(0, lambda: self.chat_scroll.verticalScrollBar().setValue(self.chat_scroll.verticalScrollBar().maximum()))
         except Exception:
             pass
+
+    def _save_message_to_current_chat(self, role: str, text: str) -> None:
+        """Save a message to the current chat's messages list."""
+        try:
+            if self._current_chat_id:
+                for chat in self._chats:
+                    if chat.get("id") == self._current_chat_id:
+                        if "messages" not in chat:
+                            chat["messages"] = []
+                        # Save plain text, not HTML
+                        chat["messages"].append({"role": role, "content": text})
+                        return
+        except Exception as e:
+            print(f"[MainWindow] Error saving message to chat: {e}")
 
     def _refresh_chat_transcript_styles(self) -> None:
         """Reapply theme-aware bubble styles (e.g. after theme toggle)."""
@@ -4789,7 +5212,11 @@ class MainWindow(QMainWindow):
             self._optimize_script_with_ai(text)
 
     def _get_text_input(self, title: str, prompt: str, enable_voice: bool = False) -> tuple[str, bool]:
-        """Get text input from user via custom styled dialog with buttons inside form."""
+        """Get text input from user with optional voice recognition and image upload.
+        
+        Returns:
+            Tuple of (text, ok_clicked, image_path)
+        """"""Get text input from user via custom styled dialog with buttons inside form."""
         dialog = QDialog(self)
         dialog.setWindowTitle(title)
         dialog.setModal(True)
@@ -5002,65 +5429,178 @@ class MainWindow(QMainWindow):
         return input_field.toPlainText(), ok_clicked
 
     def _generate_script_with_ai(self, description: str) -> None:
-        """Generate script using ChatGPT API."""
+        """Generate script using ChatGPT API - processes multiple files if available."""
         print("[MainWindow] _generate_script_with_ai called")
         
-        # Display user's prompt in the chat transcript (ChatGPT-style)
+        # Check if too many AI threads are already running (limit to 5 concurrent)
+        active_threads = [t for t in self.ai_threads if t.isRunning()]
+        if len(active_threads) >= 5:
+            print(f"[MainWindow] Too many AI threads running ({len(active_threads)}), ignoring new request")
+            try:
+                self._chat_add_message("system", "⚠️ 동시 작업이 너무 많습니다 (최대 5개). 일부 작업이 완료될 때까지 기다려주세요.")
+            except:
+                pass
+            return
+        
+        # Import Path at the top to avoid local variable error
+        from pathlib import Path
+        import re
+        
+        # Check for uploaded files first (from file upload button)
+        image_paths = []
+        user_display_description = description  # For showing to user
+        ai_description = description  # For sending to AI
+        
+        if self.selected_files:
+            # Use all uploaded files
+            image_paths = self.selected_files.copy()
+            print(f"[MainWindow] Processing {len(image_paths)} files: {image_paths}")
+            if len(image_paths) > 1:
+                file_names = ", ".join([Path(p).name for p in image_paths])
+                user_display_description = f"{description}\n\n📸 {len(image_paths)}개의 파일을 분석합니다: {file_names}"
+                # Internal instruction for AI (not shown to user)
+                ai_description = f"{description}\n\n📸 {len(image_paths)}개의 파일을 분석합니다: {file_names}\n\n⚠️ IMPORTANT: Process ALL {len(image_paths)} files separately. After analyzing the first file, add insert_paragraph() separator and process the next file."
+            else:
+                user_display_description = f"{description}\n\n📸 업로드된 파일을 분석합니다: {Path(image_paths[0]).name}"
+                ai_description = user_display_description
+        else:
+            # Check if description contains an image file path
+            # Look for image file extensions in the description
+            image_pattern = r'([^\s]+\.(?:png|jpg|jpeg|gif|bmp|pdf))'
+            match = re.search(image_pattern, description, re.IGNORECASE)
+            if match:
+                potential_path = match.group(1)
+                # Check if the file exists
+                if Path(potential_path).exists():
+                    image_paths = [potential_path]
+                    print(f"[MainWindow] Detected image file in description: {potential_path}")
+                    user_display_description = f"{description}\n\n📸 이미지 파일을 분석하여 수식을 추출합니다."
+                    ai_description = user_display_description
+        
+        # Process all files (for now, use first one)
+        image_path = image_paths[0] if image_paths else None
+        
+        # Display user's prompt in the chat transcript (ChatGPT-style) - show clean version
         try:
-            self._chat_add_message("user", description)
+            self._chat_add_message("user", user_display_description)
             self._show_thinking_animation()
         except Exception:
-            self._append_user_input(description)
-        
-        self.run_button.setEnabled(False)
-        if hasattr(self, "ai_generate_button"):
-            self.ai_generate_button.setEnabled(False)
-        if hasattr(self, "ai_optimize_button"):
-            self.ai_optimize_button.setEnabled(False)
-        
-        # Get available functions context
+            self._append_user_input(user_display_description)
         context = """
 사용 가능한 함수들:
 - insert_text(text): 텍스트 삽입
 - insert_paragraph(): 문단 추가
 - insert_equation(latex_code, font_size_pt=14.0): LaTeX 수식 삽입
 - insert_hwpeqn(hwpeqn_code, font_size_pt=12.0): HWP 수식 형식 삽입
-- insert_image(image_path): 이미지 삽입
+- insert_table(rows, cols): 표 삽입
+
+🚫 절대 사용 금지: insert_image() 함수는 존재하지 않습니다!
+⚠️ 이미지/PDF 분석 시: 파일을 삽입하지 말고, 내용을 추출하여 작성하세요!
 """
         
         # Create worker and thread
         print("[MainWindow] Creating QThread and AIWorker...")
-        self.ai_thread = QThread()
-        self.ai_worker = AIWorker(self.chatgpt, "generate", description=description, context=context)
-        self.ai_worker.moveToThread(self.ai_thread)
+        ai_thread = QThread()
+        ai_worker = AIWorker(
+            self.chatgpt, 
+            "generate", 
+            description=ai_description,  # Use AI version with internal instructions
+            context=context,
+            image_path=image_path,  # Legacy single image support
+            image_paths=image_paths  # New multi-image support
+        )
+        ai_worker.moveToThread(ai_thread)
         print("[MainWindow] Worker moved to thread")
+        
+        # Add to active threads/workers list
+        self.ai_threads.append(ai_thread)
+        self.ai_workers.append(ai_worker)
+        print(f"[MainWindow] Active threads: {len([t for t in self.ai_threads if t.isRunning()])} running, {len(self.ai_threads)} total")
         
         # Connect signals
         print("[MainWindow] Connecting signals...")
-        self.ai_thread.started.connect(self.ai_worker.run)
-        self.ai_worker.thought.connect(self._on_ai_thought)
-        self.ai_worker.finished.connect(self._on_generate_finished)
-        self.ai_worker.error.connect(self._on_generate_error)
-        self.ai_worker.finished.connect(self.ai_thread.quit)
-        self.ai_worker.error.connect(self.ai_thread.quit)
-        self.ai_thread.finished.connect(self.ai_thread.deleteLater)
+        ai_thread.started.connect(ai_worker.run)
+        ai_worker.thought.connect(self._on_ai_thought)
+        ai_worker.finished.connect(self._on_generate_finished)
+        ai_worker.error.connect(self._on_generate_error)
+        ai_worker.finished.connect(ai_thread.quit)
+        ai_worker.error.connect(ai_thread.quit)
+        
+        # Clean up thread from list when finished
+        def cleanup_thread():
+            if ai_thread in self.ai_threads:
+                self.ai_threads.remove(ai_thread)
+            if ai_worker in self.ai_workers:
+                self.ai_workers.remove(ai_worker)
+            print(f"[MainWindow] Thread cleaned up. Remaining: {len(self.ai_threads)}")
+        
+        ai_thread.finished.connect(cleanup_thread)
+        ai_thread.finished.connect(ai_thread.deleteLater)
         print("[MainWindow] Signals connected")
         
         # Start the thread
         print("[MainWindow] Starting thread...")
-        self.ai_thread.start()
+        ai_thread.start()
         print("[MainWindow] Thread started!")
     
     def _generate_and_execute_with_ai(self, description: str) -> None:
         """Generate script using ChatGPT API and auto-execute it (without showing code to user)."""
         print("[MainWindow] _generate_and_execute_with_ai called")
         
-        # Display user's prompt in the chat transcript (ChatGPT-style)
+        # Check if too many AI threads are already running (limit to 5 concurrent)
+        active_threads = [t for t in self.ai_threads if t.isRunning()]
+        if len(active_threads) >= 5:
+            print(f"[MainWindow] Too many AI threads running ({len(active_threads)}), ignoring new request")
+            try:
+                self._chat_add_message("system", "⚠️ 동시 작업이 너무 많습니다 (최대 5개). 일부 작업이 완료될 때까지 기다려주세요.")
+            except:
+                pass
+            return
+        
+        # Import Path at the top to avoid local variable error
+        from pathlib import Path
+        import re
+        
+        # Check for uploaded files first (from file upload button)
+        image_paths = []
+        user_display_description = description  # For showing to user
+        ai_description = description  # For sending to AI
+        
+        if self.selected_files:
+            # Use all uploaded files
+            image_paths = self.selected_files.copy()
+            print(f"[MainWindow] Processing {len(image_paths)} files: {image_paths}")
+            if len(image_paths) > 1:
+                file_names = ", ".join([Path(p).name for p in image_paths])
+                user_display_description = f"{description}\n\n📸 {len(image_paths)}개의 파일을 분석합니다: {file_names}"
+                # Internal instruction for AI (not shown to user)
+                ai_description = f"{description}\n\n📸 {len(image_paths)}개의 파일을 분석합니다: {file_names}\n\n⚠️ IMPORTANT: Process ALL {len(image_paths)} files separately. After analyzing the first file, add insert_paragraph() separator and process the next file."
+            else:
+                user_display_description = f"{description}\n\n📸 업로드된 파일을 분석합니다: {Path(image_paths[0]).name}"
+                ai_description = user_display_description
+        else:
+            # Check if description contains an image file path
+            # Look for image file extensions in the description
+            image_pattern = r'([^\s]+\.(?:png|jpg|jpeg|gif|bmp|pdf))'
+            match = re.search(image_pattern, description, re.IGNORECASE)
+            if match:
+                potential_path = match.group(1)
+                # Check if the file exists
+                if Path(potential_path).exists():
+                    image_paths = [potential_path]
+                    print(f"[MainWindow] Detected image file in description: {potential_path}")
+                    user_display_description = f"{description}\n\n📸 이미지 파일을 분석하여 수식을 추출합니다."
+                    ai_description = user_display_description
+        
+        # Process all files (for now, use first one)
+        image_path = image_paths[0] if image_paths else None
+        
+        # Display user's prompt in the chat transcript (ChatGPT-style) - show clean version
         try:
-            self._chat_add_message("user", description)
+            self._chat_add_message("user", user_display_description)
             self._show_thinking_animation()
         except Exception:
-            self._append_user_input(description)
+            self._append_user_input(user_display_description)
         
         self.run_button.setEnabled(False)
         if hasattr(self, "ai_generate_button"):
@@ -5131,25 +5671,47 @@ class MainWindow(QMainWindow):
         
         # Create worker and thread
         print("[MainWindow] Creating QThread and AIWorker...")
-        self.ai_thread = QThread()
-        self.ai_worker = AIWorker(self.chatgpt, "generate", description=description, context=context)
-        self.ai_worker.moveToThread(self.ai_thread)
+        ai_thread = QThread()
+        ai_worker = AIWorker(
+            self.chatgpt, 
+            "generate", 
+            description=ai_description,  # Use AI version with internal instructions
+            context=context,
+            image_path=image_path,  # Legacy single image support
+            image_paths=image_paths  # New multi-image support
+        )
+        ai_worker.moveToThread(ai_thread)
         print("[MainWindow] Worker moved to thread")
+        
+        # Add to active threads/workers list
+        self.ai_threads.append(ai_thread)
+        self.ai_workers.append(ai_worker)
+        print(f"[MainWindow] Active threads: {len([t for t in self.ai_threads if t.isRunning()])} running, {len(self.ai_threads)} total")
         
         # Connect signals
         print("[MainWindow] Connecting signals...")
-        self.ai_thread.started.connect(self.ai_worker.run)
-        self.ai_worker.thought.connect(self._on_ai_thought)
-        self.ai_worker.finished.connect(self._on_generate_finished)
-        self.ai_worker.error.connect(self._on_generate_error)
-        self.ai_worker.finished.connect(self.ai_thread.quit)
-        self.ai_worker.error.connect(self.ai_thread.quit)
-        self.ai_thread.finished.connect(self.ai_thread.deleteLater)
+        ai_thread.started.connect(ai_worker.run)
+        ai_worker.thought.connect(self._on_ai_thought)
+        ai_worker.finished.connect(self._on_generate_finished)
+        ai_worker.error.connect(self._on_generate_error)
+        ai_worker.finished.connect(ai_thread.quit)
+        ai_worker.error.connect(ai_thread.quit)
+        
+        # Clean up thread from list when finished
+        def cleanup_thread():
+            if ai_thread in self.ai_threads:
+                self.ai_threads.remove(ai_thread)
+            if ai_worker in self.ai_workers:
+                self.ai_workers.remove(ai_worker)
+            print(f"[MainWindow] Thread cleaned up. Remaining: {len(self.ai_threads)}")
+        
+        ai_thread.finished.connect(cleanup_thread)
+        ai_thread.finished.connect(ai_thread.deleteLater)
         print("[MainWindow] Signals connected")
         
         # Start the thread
         print("[MainWindow] Starting thread...")
-        self.ai_thread.start()
+        ai_thread.start()
         print("[MainWindow] Thread started!")
     
     def _on_generate_finished(self, generated_code: str) -> None:
@@ -5159,6 +5721,11 @@ class MainWindow(QMainWindow):
         
         # Update with completion message (will trigger fade animation)
         self._update_progress_message(completion_msg)
+        
+        # Clear selected files after successful generation (AI has processed the image)
+        if self.selected_files:
+            print(f"[MainWindow] Clearing selected_files after AI generation: {self.selected_files}")
+            self.selected_files.clear()
         
         # Parse all sections from response
         code = ""
@@ -5182,49 +5749,37 @@ class MainWindow(QMainWindow):
             self._clear_progress_message()
             self._remove_thinking_animation()
             
-            # Check if we should auto-execute (new natural language mode)
-            if self._auto_execute_mode:
-                self._auto_execute_mode = False  # Reset flag
-                if code:
-                    # Show description first (what AI will do)
-                    if description:
-                        try:
-                            self._chat_add_message("assistant", description)
-                        except Exception:
-                            pass
-                    
-                    # Check if HWP is available before executing (cross-platform)
-                    hwp_available = False
+            # Always auto-execute (users want results, not code)
+            self._auto_execute_mode = False  # Reset flag
+            
+            if code:
+                # Show description first (what AI will do)
+                if description:
                     try:
-                        test_hwp = HwpController()
-                        test_hwp.connect()
-                        hwp_available = True
+                        self._chat_add_message("assistant", description)
                     except Exception:
                         pass
-                    
-                    if hwp_available:
-                        # Execute the code to modify HWP
-                        self._worker = ScriptWorker(code, self)
-                        self._worker.log_signal.connect(lambda msg: None)  # Suppress log messages
-                        self._worker.error_signal.connect(lambda err: self._chat_add_message("assistant", f"❌ 오류: {err}"))
-                        self._worker.finished_signal.connect(lambda: self._on_auto_execution_finished())
-                        self._worker.start()
-                    else:
-                        # HWP not available, just show response
-                        try:
-                            self._chat_add_message("assistant", "💡 한글(HWP)이 실행 중이지 않아 작업을 수행할 수 없습니다. 한글 문서를 열고 다시 시도해주세요.")
-                        except Exception:
-                            pass
-                        self.run_button.setEnabled(True)
-                        if hasattr(self, "ai_generate_button"):
-                            self.ai_generate_button.setEnabled(True)
-                        if hasattr(self, "ai_optimize_button"):
-                            self.ai_optimize_button.setEnabled(True)
+                
+                # Check if HWP is available before executing (cross-platform)
+                hwp_available = False
+                try:
+                    test_hwp = HwpController()
+                    test_hwp.connect()
+                    hwp_available = True
+                except Exception:
+                    pass
+                
+                if hwp_available:
+                    # Execute the code to modify HWP
+                    self._worker = ScriptWorker(code, self)
+                    self._worker.log_signal.connect(lambda msg: None)  # Suppress log messages
+                    self._worker.error_signal.connect(lambda err: self._chat_add_message("assistant", f"❌ 오류: {err}"))
+                    self._worker.finished_signal.connect(lambda: self._on_auto_execution_finished())
+                    self._worker.start()
                 else:
-                    # No code generated
+                    # HWP not available, just show response
                     try:
-                        msg = description if description else "작업을 수행할 수 없었습니다."
-                        self._chat_add_message("assistant", msg)
+                        self._chat_add_message("assistant", "💡 한글(HWP)이 실행 중이지 않아 작업을 수행할 수 없습니다. 한글 문서를 열고 다시 시도해주세요.")
                     except Exception:
                         pass
                     self.run_button.setEnabled(True)
@@ -5233,25 +5788,12 @@ class MainWindow(QMainWindow):
                     if hasattr(self, "ai_optimize_button"):
                         self.ai_optimize_button.setEnabled(True)
             else:
-                # Original mode: show code to user
+                # No code generated
                 try:
-                    parts: list[str] = []
-                    if code:
-                        parts.append("💻 코드\n" + code)
-                    if description:
-                        parts.append("📝 설명\n" + description)
-                    self._chat_add_message("assistant", "\n\n".join(parts) if parts else "완료되었습니다.")
+                    msg = description if description else "작업을 수행할 수 없었습니다."
+                    self._chat_add_message("assistant", msg)
                 except Exception:
-                    # Fallback to legacy log output
-                    if code:
-                        self._append_log("\n\n💻 코드")
-                        self._append_log(code)
-                    if description:
-                        self._append_log("\n📝 설명")
-                        self._append_log(description)
-                # Put code in editor
-                if code:
-                    self.script_edit.setPlainText(code)
+                    pass
                 self.run_button.setEnabled(True)
                 if hasattr(self, "ai_generate_button"):
                     self.ai_generate_button.setEnabled(True)
@@ -5296,6 +5838,16 @@ class MainWindow(QMainWindow):
         """Optimize current script using ChatGPT API."""
         print("[MainWindow] _optimize_script_with_ai called")
         
+        # Check if too many AI threads are already running (limit to 5 concurrent)
+        active_threads = [t for t in self.ai_threads if t.isRunning()]
+        if len(active_threads) >= 5:
+            print(f"[MainWindow] Too many AI threads running ({len(active_threads)}), ignoring new request")
+            try:
+                self._chat_add_message("system", "⚠️ 동시 작업이 너무 많습니다 (최대 5개). 일부 작업이 완료될 때까지 기다려주세요.")
+            except:
+                pass
+            return
+        
         # Display user's prompt in the chat transcript (ChatGPT-style)
         try:
             self._chat_add_message("user", feedback if feedback.strip() else "(기본 최적화 요청)")
@@ -5313,25 +5865,40 @@ class MainWindow(QMainWindow):
         
         # Create worker and thread
         print("[MainWindow] Creating QThread and AIWorker...")
-        self.ai_thread = QThread()
-        self.ai_worker = AIWorker(self.chatgpt, "optimize", script=current_script, feedback=feedback)
-        self.ai_worker.moveToThread(self.ai_thread)
+        ai_thread = QThread()
+        ai_worker = AIWorker(self.chatgpt, "optimize", script=current_script, feedback=feedback)
+        ai_worker.moveToThread(ai_thread)
         print("[MainWindow] Worker moved to thread")
+        
+        # Add to active threads/workers list
+        self.ai_threads.append(ai_thread)
+        self.ai_workers.append(ai_worker)
+        print(f"[MainWindow] Active threads: {len([t for t in self.ai_threads if t.isRunning()])} running, {len(self.ai_threads)} total")
         
         # Connect signals
         print("[MainWindow] Connecting signals...")
-        self.ai_thread.started.connect(self.ai_worker.run)
-        self.ai_worker.thought.connect(self._on_ai_thought)
-        self.ai_worker.finished.connect(self._on_optimize_finished)
-        self.ai_worker.error.connect(self._on_optimize_error)
-        self.ai_worker.finished.connect(self.ai_thread.quit)
-        self.ai_worker.error.connect(self.ai_thread.quit)
-        self.ai_thread.finished.connect(self.ai_thread.deleteLater)
+        ai_thread.started.connect(ai_worker.run)
+        ai_worker.thought.connect(self._on_ai_thought)
+        ai_worker.finished.connect(self._on_optimize_finished)
+        ai_worker.error.connect(self._on_optimize_error)
+        ai_worker.finished.connect(ai_thread.quit)
+        ai_worker.error.connect(ai_thread.quit)
+        
+        # Clean up thread from list when finished
+        def cleanup_thread():
+            if ai_thread in self.ai_threads:
+                self.ai_threads.remove(ai_thread)
+            if ai_worker in self.ai_workers:
+                self.ai_workers.remove(ai_worker)
+            print(f"[MainWindow] Thread cleaned up. Remaining: {len(self.ai_threads)}")
+        
+        ai_thread.finished.connect(cleanup_thread)
+        ai_thread.finished.connect(ai_thread.deleteLater)
         print("[MainWindow] Signals connected")
         
         # Start the thread
         print("[MainWindow] Starting thread...")
-        self.ai_thread.start()
+        ai_thread.start()
         print("[MainWindow] Thread started!")
     
     def _on_optimize_finished(self, optimized_code: str) -> None:
@@ -6199,6 +6766,7 @@ class MainWindow(QMainWindow):
                     "title": "New chat",
                     "log": "",
                     "script": DEFAULT_SCRIPT.strip(),
+                    "messages": [],  # Initialize empty messages list
                     "created_at": now,
                     "updated_at": now,
                 },

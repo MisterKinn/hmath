@@ -79,6 +79,8 @@ class HwpScriptRunner:
             "insert_math_text": self._controller.insert_math_text,
             "insert_equation_via_editor": self._controller.insert_equation_via_editor,
             "open_formula_editor": self._controller.open_formula_editor,
+            "write_in_formula_editor": self._controller.write_in_formula_editor,
+            "type_in_open_formula_editor": self._controller.type_in_open_formula_editor,
             "insert_image": self._controller.insert_image,
             "insert_table": self._controller.insert_table,
             "insert_equation": _insert_equation,
