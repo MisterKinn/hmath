@@ -253,10 +253,9 @@ QToolButton#drawer-chat-delete {
     min-height: 28px;
     color: #bfc7cf;
     border: none;
-    visibility: hidden;
     font-size: 13px;
 }
-QWidget#drawer-chat-list QWidget#drawer-chat-item-wrap:hover QToolButton#drawer-chat-delete { visibility: visible; color: #9ca3af; }
+QWidget#drawer-chat-list QWidget#drawer-chat-item-wrap:hover QToolButton#drawer-chat-delete { color: #ef4444; }
 QToolButton#drawer-chat-delete:hover { background-color: #f3f4f6; color: #ef4444; border-radius: 6px; }
 
 /* Edit button: use edit.png asset and keep hidden until row hover */
@@ -267,10 +266,9 @@ QToolButton#drawer-chat-edit {
     min-height: 28px;
     color: #bfc7cf;
     border: none;
-    visibility: hidden;
     font-size: 13px;
 }
-QWidget#drawer-chat-list QWidget#drawer-chat-item-wrap:hover QToolButton#drawer-chat-edit { visibility: visible; color: #9ca3af; }
+QWidget#drawer-chat-list QWidget#drawer-chat-item-wrap:hover QToolButton#drawer-chat-edit { color: #6b7280; }
 QToolButton#drawer-chat-edit:hover { background-color: #f3f4f6; color: #0f1724; border-radius: 6px; }
 
 QWidget#drawer-profile-wrap { border-top: 1px solid #e9ecef; padding-top: 12px; }
@@ -324,10 +322,9 @@ QToolButton#drawer-chat-delete {
     min-width: 28px;
     min-height: 28px;
     color: #9ca3af;
-    visibility: hidden;
     font-size: 13px;
 }
-QWidget#drawer-chat-list QWidget#drawer-chat-item-wrap:hover QToolButton#drawer-chat-delete { visibility: visible; }
+QWidget#drawer-chat-list QWidget#drawer-chat-item-wrap:hover QToolButton#drawer-chat-delete { color: #ef4444; }
 
 /* Profile area */
 QLabel#drawer-avatar {

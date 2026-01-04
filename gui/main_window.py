@@ -46,6 +46,7 @@ from . import design
 from backend.hwp.hwp_controller import HwpController, HwpControllerError
 from backend.hwp.script_runner import HwpScriptRunner
 from backend.chatgpt_helper import ChatGPTHelper
+from backend.ai_model_helper import MultiModelAIHelper
 from backend.backup_manager import BackupManager
 
 
@@ -97,9 +98,9 @@ class AIWorker(QObject):
     error = Signal(str)  # Emits error message
     thought = Signal(str)  # Emits thought process updates
     
-    def __init__(self, chatgpt: ChatGPTHelper, task_type: str, **kwargs):
+    def __init__(self, ai_helper, task_type: str, **kwargs):
         super().__init__()
-        self.chatgpt = chatgpt
+        self.ai_helper = ai_helper  # Can be ChatGPTHelper or MultiModelAIHelper
         self.task_type = task_type
         self.kwargs = kwargs
     
@@ -114,8 +115,11 @@ class AIWorker(QObject):
                 print(f"[AIWorker] Thought: {message}")
                 self.thought.emit(message)
             
+            # Get model parameter
+            model = self.kwargs.get('model', 'auto')
+            
             if self.task_type == "generate":
-                print(f"[AIWorker] Calling generate_script...")
+                print(f"[AIWorker] Calling generate_script with model: {model}...")
                 
                 # Check if we have multiple images to process
                 image_paths = self.kwargs.get('image_paths', [])
@@ -134,11 +138,12 @@ class AIWorker(QObject):
                             # For subsequent images, modify description
                             desc = f"다음 파일을 분석합니다 (파일 {idx}/{len(image_paths)})"
                         
-                        result = self.chatgpt.generate_script(
+                        result = self.ai_helper.generate_script(
                             desc,
                             self.kwargs.get('context', ''),
                             image_path=img_path,
-                            on_thought=on_thought
+                            on_thought=on_thought,
+                            model=model
                         )
                         
                         if result:
@@ -166,20 +171,22 @@ class AIWorker(QObject):
                         result = None
                 else:
                     # Single image or no image
-                    result = self.chatgpt.generate_script(
+                    result = self.ai_helper.generate_script(
                         self.kwargs['description'],
                         self.kwargs.get('context', ''),
                         image_path=image_path or (image_paths[0] if image_paths else None),
-                        on_thought=on_thought
+                        on_thought=on_thought,
+                        model=model
                     )
                 
                 print(f"[AIWorker] Generate result: {len(result) if result else 0} chars")
             elif self.task_type == "optimize":
-                print(f"[AIWorker] Calling optimize_script...")
-                result = self.chatgpt.optimize_script(
+                print(f"[AIWorker] Calling optimize_script with model: {model}...")
+                result = self.ai_helper.optimize_script(
                     self.kwargs['script'],
                     self.kwargs.get('feedback', ''),
-                    on_thought=on_thought
+                    on_thought=on_thought,
+                    model=model
                 )
                 print(f"[AIWorker] Optimize result: {len(result) if result else 0} chars")
             else:
@@ -346,7 +353,9 @@ class MainWindow(QMainWindow):
         self.ai_workers: list[AIWorker] = []  # List of active AI workers
         # Default to light theme (pure white background)
         self.dark_mode = False
-        self.chatgpt = ChatGPTHelper()
+        self.chatgpt = ChatGPTHelper()  # Legacy support
+        self.ai_helper = MultiModelAIHelper()  # New multi-model helper
+        self.current_model = self.ai_helper.get_cheapest_model() or "gpt-4o-mini"  # Default to cheapest
         self.backup_manager = BackupManager()  # Initialize backup manager
         # Profile defaults (ensure drawer/profile UI can be built safely)
         self.profile_display_name = "사용자"
@@ -518,7 +527,9 @@ class MainWindow(QMainWindow):
         """
         try:
             storage = Path.home() / ".formulite_chats.json"
+            print(f"[Persist] Checking for storage file: {storage}")
             if not storage.exists():
+                print("[Persist] No storage file found, starting fresh")
                 return
             import json
             data = json.loads(storage.read_text(encoding='utf-8'))
@@ -526,17 +537,21 @@ class MainWindow(QMainWindow):
             # Load chats if available
             if "chats" in data and isinstance(data["chats"], list):
                 self._chats = data["chats"]
-                print(f"[Persist] Loaded {len(self._chats)} chats from storage")
+                print(f"[Persist] ✅ Loaded {len(self._chats)} chats from storage")
+            else:
+                print("[Persist] No chats found in storage file")
             
             # Load current chat ID
             if "current" in data:
                 self._current_chat_id = data["current"]
+                print(f"[Persist] Current chat ID: {self._current_chat_id}")
             
             # Try a couple of places for the model so we remain tolerant to schema changes
             model = data.get("model") or (data.get("settings") or {}).get("model")
             if model:
                 try:
                     self._set_model(str(model))
+                    print(f"[Persist] Model set to: {model}")
                 except Exception:
                     pass
         except Exception as e:
@@ -545,6 +560,7 @@ class MainWindow(QMainWindow):
     def _ensure_default_chat(self) -> None:
         """Ensure at least one default chat exists on startup."""
         try:
+            print(f"[MainWindow] _ensure_default_chat called. Current chats: {len(self._chats)}")
             if len(self._chats) == 0:
                 # Create a default chat
                 import uuid
@@ -563,8 +579,42 @@ class MainWindow(QMainWindow):
                 self._chats.append(default_chat)
                 self._current_chat_id = new_id
                 print(f"[MainWindow] Created default chat: {new_id}")
-                # Render the chat list to show the new chat
-                self._render_chat_list()
+                
+                # Delay rendering to ensure UI is fully initialized
+                def activate_and_render():
+                    try:
+                        # Render the chat list to show the new chat
+                        self._render_chat_list()
+                        # Activate the default chat so it's ready to use (don't close drawer on startup)
+                        self._activate_chat(new_id, close_drawer=False)
+                        print(f"[MainWindow] ✅ Default chat activated and ready!")
+                    except Exception as e:
+                        print(f"[MainWindow] Error in delayed activation: {e}")
+                
+                QTimer.singleShot(100, activate_and_render)
+            else:
+                print(f"[MainWindow] Chats already exist ({len(self._chats)}), not creating default")
+                
+                # Always render existing chats
+                def render_and_activate_existing():
+                    try:
+                        # Render the chat list to show all loaded chats
+                        self._render_chat_list()
+                        
+                        # If no chat is active, activate the first one
+                        if not self._current_chat_id and self._chats:
+                            first_chat_id = self._chats[0].get("id")
+                            if first_chat_id:
+                                self._activate_chat(first_chat_id, close_drawer=False)
+                                print(f"[MainWindow] ✅ Activated first existing chat: {first_chat_id}")
+                        elif self._current_chat_id:
+                            # Current chat already set, just activate it
+                            self._activate_chat(self._current_chat_id, close_drawer=False)
+                            print(f"[MainWindow] ✅ Activated current chat: {self._current_chat_id}")
+                    except Exception as e:
+                        print(f"[MainWindow] Error rendering/activating existing chats: {e}")
+                
+                QTimer.singleShot(100, render_and_activate_existing)
         except Exception as e:
             print(f"[MainWindow] Error ensuring default chat: {e}")
 
@@ -587,22 +637,8 @@ class MainWindow(QMainWindow):
                 if widget:
                     widget.deleteLater()
             # Apply filter
-            # If there are no chats yet, seed a set of placeholder chats to match the expected sidebar look
-            if not self._chats and not getattr(self, '_seeded_chats', False):
-                import uuid as _uuid
-                now = time.time()
-                for _ in range(12):
-                    cid = str(_uuid.uuid4())
-                    self._chats.append({
-                        'id': cid,
-                        'title': 'New chat',
-                        'log': '',
-                        'script': DEFAULT_SCRIPT.strip(),
-                        'created_at': now,
-                        'updated_at': now,
-                    })
-                self._seeded_chats = True
-
+            # No longer seeding placeholder chats - we handle empty state with _ensure_default_chat
+            
             chats = [c for c in self._chats if (self._chat_filter.lower() in (c.get("title", "").lower()))]
             for chat in chats:
                 item_wrap = QWidget()
@@ -977,8 +1013,13 @@ class MainWindow(QMainWindow):
         except Exception:
             return False
 
-    def _activate_chat(self, chat_id: str) -> None:
-        """Activate the chat with the given id, loading its content into the UI."""
+    def _activate_chat(self, chat_id: str, close_drawer: bool = True) -> None:
+        """Activate the chat with the given id, loading its content into the UI.
+        
+        Args:
+            chat_id: The ID of the chat to activate
+            close_drawer: Whether to close the drawer after activation (default: True)
+        """
         try:
             for chat in self._chats:
                 if chat.get("id") == chat_id:
@@ -1000,7 +1041,8 @@ class MainWindow(QMainWindow):
                     self._restore_chat_messages(chat)
                     
                     self._render_chat_list()
-                    self._set_drawer_open(False)
+                    if close_drawer:
+                        self._set_drawer_open(False)
                     return
         except Exception as e:
             print(f"[MainWindow] Error activating chat: {e}")
@@ -1609,6 +1651,31 @@ class MainWindow(QMainWindow):
             except Exception:
                 self.drawer_toggle_btn.setText("≡")
         top_bar_layout.addWidget(self.drawer_toggle_btn, alignment=Qt.AlignmentFlag.AlignLeft)
+        
+        # Model selection dropdown next to hamburger button
+        self.model_selector = QPushButton()
+        self.model_selector.setObjectName("model-selector")
+        self.model_selector.setToolTip("AI 모델 선택")
+        self.model_selector.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._update_model_selector_text()
+        self.model_selector.clicked.connect(self._show_model_selection_menu)
+        self.model_selector.setStyleSheet("""
+            QPushButton#model-selector {
+                background: transparent;
+                border: 1px solid #e0e0e0;
+                border-radius: 6px;
+                padding: 6px 12px;
+                font-size: 13px;
+                font-weight: 600;
+                color: #424242;
+            }
+            QPushButton#model-selector:hover {
+                background: #f5f5f5;
+                border-color: #bdbdbd;
+            }
+        """)
+        top_bar_layout.addWidget(self.model_selector, alignment=Qt.AlignmentFlag.AlignLeft)
+        top_bar_layout.addSpacing(8)
         # Add spacing between hamburger and model display for better separation
         top_bar_layout.addSpacing(12)
 
@@ -2260,6 +2327,11 @@ class MainWindow(QMainWindow):
 
     def _set_drawer_open(self, open_: bool, animate: bool = True) -> None:
         self._drawer_open = open_
+        
+        # Render chat list when opening drawer to show latest state
+        if open_:
+            self._render_chat_list()
+        
         self._apply_drawer_state(animate=animate)
         if not open_:
             # hide any popups when closing the drawer
@@ -2319,6 +2391,66 @@ class MainWindow(QMainWindow):
     def _toggle_drawer(self) -> None:
         self._drawer_open = not getattr(self, "_drawer_open", False)
         self._apply_drawer_state(animate=True)
+    
+    def _update_model_selector_text(self) -> None:
+        """Update the model selector button text to show current model."""
+        if hasattr(self, 'model_selector'):
+            # Shorten model name for display
+            display_name = self.current_model.replace("-20240307", "").replace("-", " ")
+            if "gpt" in display_name.lower():
+                display_name = display_name.replace("gpt 4o mini", "GPT-4o Mini")
+            elif "gemini" in display_name.lower():
+                display_name = "Gemini Flash"
+            elif "claude" in display_name.lower():
+                display_name = "Claude Haiku"
+            elif "grok" in display_name.lower():
+                display_name = "Grok Beta"
+            self.model_selector.setText(f"🤖 {display_name}")
+    
+    def _show_model_selection_menu(self) -> None:
+        """Show a menu to select AI model."""
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu {
+                background: white;
+                border: 1px solid #e0e0e0;
+                border-radius: 8px;
+                padding: 4px;
+            }
+            QMenu::item {
+                padding: 8px 16px;
+                border-radius: 4px;
+            }
+            QMenu::item:selected {
+                background: #f5f5f5;
+            }
+        """)
+        
+        # Get available models
+        available_models = self.ai_helper.get_available_models()
+        
+        if not available_models:
+            no_models_action = menu.addAction("⚠️ API 키가 설정되지 않았습니다")
+            no_models_action.setEnabled(False)
+        else:
+            for model_id, description, cost in available_models:
+                # Show checkmark for current model
+                prefix = "✓ " if model_id == self.current_model else "   "
+                action_text = f"{prefix}{description}"
+                action = menu.addAction(action_text)
+                action.setData(model_id)
+                action.triggered.connect(lambda checked=False, m=model_id: self._select_model(m))
+        
+        # Show menu below the button
+        menu.exec(self.model_selector.mapToGlobal(
+            QPoint(0, self.model_selector.height())
+        ))
+    
+    def _select_model(self, model_id: str) -> None:
+        """Select a different AI model."""
+        self.current_model = model_id
+        self._update_model_selector_text()
+        print(f"[MainWindow] Selected model: {model_id}")
 
     def _apply_drawer_state(self, animate: bool = True) -> None:
         if not hasattr(self, "drawer_panel") or not hasattr(self, "drawer_overlay"):
@@ -3154,10 +3286,12 @@ class MainWindow(QMainWindow):
                 self._apply_button_icon(self.hwp_add_btn, "plus", "+", QSize(24, 24))
         self._apply_button_icon(self.ai_selector_btn, "ai", "[AI]", QSize(28, 28))
         self._apply_button_icon(self.mic_btn, "mic", "[MIC]", QSize(28, 28))
-        self.howto_button.setText("도움말")
-        self._apply_button_icon(self.howto_button, "help", "[?]", QSize(20, 20), preserve_text=True)
-        self.ai_generate_button.setText("AI 생성")
-        self._apply_button_icon(self.ai_generate_button, "generate", "[+]", QSize(20, 20), preserve_text=True)
+        if hasattr(self, "howto_button"):
+            self.howto_button.setText("도움말")
+            self._apply_button_icon(self.howto_button, "help", "[?]", QSize(20, 20), preserve_text=True)
+        if hasattr(self, "ai_generate_button"):
+            self.ai_generate_button.setText("AI 생성")
+            self._apply_button_icon(self.ai_generate_button, "generate", "[+]", QSize(20, 20), preserve_text=True)
         # AI Optimize button removed from main UI; keep handler methods but no button present.
         # Ensure help buttons keep their distinct inline styling after icon refresh
         self._apply_help_button_style()
@@ -3333,10 +3467,10 @@ class MainWindow(QMainWindow):
             return
         
         # Check if ChatGPT is available
-        if not self.chatgpt.is_available():
+        if not self.ai_helper.is_available():
             self._show_error_dialog(
-                "ChatGPT API를 사용할 수 없습니다.\n\n"
-                "자세한 사항은 개발진에게 문의해주세요."
+                "AI API를 사용할 수 없습니다.\n\n"
+                "API 키를 설정해주세요. 자세한 사항은 개발진에게 문의해주세요."
             )
             return
         
@@ -5166,10 +5300,10 @@ class MainWindow(QMainWindow):
 
     def _show_ai_generate_dialog(self) -> None:
         """Show dialog to generate script with ChatGPT."""
-        if not self.chatgpt.is_available():
+        if not self.ai_helper.is_available():
             self._show_error_dialog(
-                "ChatGPT API를 사용할 수 없습니다.\n\n"
-                "자세한 사항은 개발진에게 문의해주세요."
+                "AI API를 사용할 수 없습니다.\n\n"
+                "API 키를 설정해주세요. 자세한 사항은 개발진에게 문의해주세요."
             )
             return
 
@@ -5187,10 +5321,10 @@ class MainWindow(QMainWindow):
 
     def _show_ai_optimize_dialog(self) -> None:
         """Show dialog to optimize current script with ChatGPT."""
-        if not self.chatgpt.is_available():
+        if not self.ai_helper.is_available():
             self._show_error_dialog(
-                "ChatGPT API를 사용할 수 없습니다.\n\n"
-                "자세한 사항은 개발진에게 문의해주세요."
+                "AI 기능을 사용할 수 없습니다.\n\n"
+                "API 키를 설정해주세요. 자세한 사항은 개발진에게 문의해주세요."
             )
             return
 
@@ -5502,12 +5636,13 @@ class MainWindow(QMainWindow):
         print("[MainWindow] Creating QThread and AIWorker...")
         ai_thread = QThread()
         ai_worker = AIWorker(
-            self.chatgpt, 
+            self.ai_helper, 
             "generate", 
             description=ai_description,  # Use AI version with internal instructions
             context=context,
             image_path=image_path,  # Legacy single image support
-            image_paths=image_paths  # New multi-image support
+            image_paths=image_paths,  # New multi-image support
+            model=self.current_model  # Use selected model
         )
         ai_worker.moveToThread(ai_thread)
         print("[MainWindow] Worker moved to thread")
@@ -5673,12 +5808,13 @@ class MainWindow(QMainWindow):
         print("[MainWindow] Creating QThread and AIWorker...")
         ai_thread = QThread()
         ai_worker = AIWorker(
-            self.chatgpt, 
+            self.ai_helper, 
             "generate", 
             description=ai_description,  # Use AI version with internal instructions
             context=context,
             image_path=image_path,  # Legacy single image support
-            image_paths=image_paths  # New multi-image support
+            image_paths=image_paths,  # New multi-image support
+            model=self.current_model  # Use selected model
         )
         ai_worker.moveToThread(ai_thread)
         print("[MainWindow] Worker moved to thread")
@@ -5866,7 +6002,13 @@ class MainWindow(QMainWindow):
         # Create worker and thread
         print("[MainWindow] Creating QThread and AIWorker...")
         ai_thread = QThread()
-        ai_worker = AIWorker(self.chatgpt, "optimize", script=current_script, feedback=feedback)
+        ai_worker = AIWorker(
+            self.ai_helper, 
+            "optimize", 
+            script=current_script, 
+            feedback=feedback,
+            model=self.current_model  # Use selected model
+        )
         ai_worker.moveToThread(ai_thread)
         print("[MainWindow] Worker moved to thread")
         

@@ -7,6 +7,8 @@ numpy>=1.26
 pyinstaller>=6.0
 openai>=1.0.0
 python-dotenv>=1.0.0
+anthropic>=0.18.0
+google-generativeai>=0.3.0
 
 # Windows-only dependencies
 pyhwpx>=1.6.6; sys_platform == 'win32'

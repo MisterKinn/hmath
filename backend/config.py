@@ -42,9 +42,19 @@ class PathsConfig:
     ) / "inline_hwp_ai"
 
 
+@dataclass(frozen=True)
+class AIConfig:
+    """AI model configuration."""
+    openai_api_key: Optional[str] = os.getenv("OPENAI_API_KEY")
+    anthropic_api_key: Optional[str] = os.getenv("ANTHROPIC_API_KEY")
+    google_api_key: Optional[str] = os.getenv("GOOGLE_API_KEY")
+    xai_api_key: Optional[str] = os.getenv("XAI_API_KEY")
+
+
 PDF = PdfConfig()
 OCR = OcrConfig()
 PATHS = PathsConfig()
+AI = AIConfig()
 PATHS.output_root.mkdir(parents=True, exist_ok=True)
 
 
@@ -53,4 +63,3 @@ def build_temp_dir(prefix: str) -> Path:
     directory = PATHS.output_root / prefix
     directory.mkdir(parents=True, exist_ok=True)
     return directory
-

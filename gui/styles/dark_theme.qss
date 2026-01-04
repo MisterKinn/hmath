@@ -76,7 +76,7 @@ QPushButton#drawer-chat-item {
     background: transparent;
     border: none;
     text-align: left;
-    padding: 8px 8px;
+    padding: 12px 8px 8px 8px;
     font-size: 14px;
     font-weight: 700;
     color: #e8e8e8;
@@ -102,10 +102,9 @@ QToolButton#drawer-chat-delete {
     min-width: 28px;
     min-height: 28px;
     color: #9ca3af;
-    visibility: hidden;
     font-size: 13px;
 }
-QWidget#drawer-chat-list QWidget#drawer-chat-item-wrap:hover QToolButton#drawer-chat-delete { visibility: visible; }
+QWidget#drawer-chat-list QWidget#drawer-chat-item-wrap:hover QToolButton#drawer-chat-delete { color: #ffffff; }
 
 /* Edit button styling for dark theme */
 QToolButton#drawer-chat-edit {
@@ -115,10 +114,9 @@ QToolButton#drawer-chat-edit {
     min-height: 28px;
     color: #bfc7cf;
     border: none;
-    visibility: hidden;
     font-size: 13px;
 }
-QWidget#drawer-chat-list QWidget#drawer-chat-item-wrap:hover QToolButton#drawer-chat-edit { visibility: visible; color: #bfc7cf; }
+QWidget#drawer-chat-list QWidget#drawer-chat-item-wrap:hover QToolButton#drawer-chat-edit { color: #ffffff; }
 QToolButton#drawer-chat-edit:hover { background-color: #1a1a1a; color: #ffffff; border-radius: 6px; }
 
 #template-btn {
