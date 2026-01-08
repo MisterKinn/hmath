@@ -10,7 +10,6 @@ Examples:
 """
 
 import re
-from typing import str as String
 
 
 def latex_to_hwp_formula(latex: str) -> str:

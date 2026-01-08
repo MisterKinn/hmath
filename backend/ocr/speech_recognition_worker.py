@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from PySide6.QtCore import QThread, Signal
 import speech_recognition as sr
-from typing import Optional
 
 
 class SpeechRecognitionWorker(QThread):

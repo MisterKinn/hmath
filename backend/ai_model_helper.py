@@ -1,6 +1,5 @@
-"""Multi-model AI integration for script generation and optimization."""
 
-from __future__ import annotations
+"""Multi-model AI integration for script generation and optimization."""
 
 import os
 import time
@@ -31,11 +30,20 @@ except ImportError:
 
 
 class MultiModelAIHelper:
+    # Models that support vision (image input)
+    VISION_MODELS = [
+        "gpt-4-vision-preview",  # Example OpenAI vision model
+        "gpt-4-vision",          # Alias for vision
+        "gemini-2.0-flash",      # Gemini supports vision
+        "claude-3-haiku",        # Claude vision
+        # Add more as needed
+    ]
     """Helper class for multi-model AI API integration (GPT, Gemini, Grok, Claude)."""
     
     # Model pricing per 1M tokens (input/output) - using cheapest models
     PRICING = {
         "gpt-5-nano": {"input": 0.150, "output": 0.600},
+        "gpt-5-mini": {"input": 0.200, "output": 0.800},
         "gemini-2.0-flash": {"input": 0.075, "output": 0.300},
         "grok-beta": {"input": 5.000, "output": 15.000},  # Currently expensive
         "claude-3-haiku": {"input": 0.250, "output": 1.250},
@@ -389,6 +397,21 @@ class MultiModelAIHelper:
             print(f"[MultiModelAI] Grok error: {e}")
             return None
 
+    def _extract_text_with_ocr(self, image_path: str) -> Optional[str]:
+        """Extract text from image using pytesseract OCR."""
+        print(f"[MultiModelAI] [OCR] Starting OCR extraction for image: {image_path}")
+        try:
+            from PIL import Image
+            import pytesseract
+            img = Image.open(image_path)
+            print(f"[MultiModelAI] [OCR] Image loaded successfully.")
+            text = pytesseract.image_to_string(img, lang='eng+kor')
+            print(f"[MultiModelAI] [OCR] Extracted text:\n{text}")
+            return text.strip()
+        except Exception as e:
+            print(f"[MultiModelAI] [OCR] OCR extraction failed: {e}")
+            return None
+
     def _call_api_with_retry(
         self, 
         full_prompt: str, 
@@ -417,9 +440,21 @@ class MultiModelAIHelper:
                 return None
             print(f"[MultiModelAI] Auto-selected cheapest model: {model}")
 
+        # If image is provided, check if model supports vision
+        if image_path:
+            # Use Gemini for both image-to-text extraction and answer generation (including HWP file operation)
+            print(f"[MultiModelAI] [PROCESS] Using Gemini for full image-based workflow (extraction and answer generation)")
+            if not self.gemini_model:
+                print(f"[MultiModelAI] [PROCESS] ERROR: Gemini model is not available.")
+                return None
+            # Use the full prompt for Gemini, not just extraction
+            result = self._call_gemini(full_prompt, image_path)
+            print(f"[MultiModelAI] [PROCESS] Gemini returned: {result if result else '[NO RESULT]'}")
+            return result
+
         # Ensure vision models receive base64 when an image path is provided
         if image_path and not image_base64:
-            if ("claude" in model) or ("haiku" in model) or ("gpt" in model):
+            if any(vision_id in model for vision_id in self.VISION_MODELS):
                 try:
                     image_base64 = self._encode_image_to_base64(image_path)
                     if image_base64:
@@ -428,10 +463,10 @@ class MultiModelAIHelper:
                     print(f"[MultiModelAI] Failed to encode image for model {model}: {e}")
 
         # Hard-stop if a vision model was requested with an image but no base64 was produced
-        if image_path and ("claude" in model or "haiku" in model) and not image_base64:
+        if image_path and any(vision_id in model for vision_id in self.VISION_MODELS) and not image_base64:
             print(f"[MultiModelAI] ERROR: image provided but failed to encode for model {model}")
             return None
-        
+
         # Route to appropriate API
         print(f"[MultiModelAI] Processing request with model: {model}")
         if "gpt" in model or "gpt-5-nano" in model:

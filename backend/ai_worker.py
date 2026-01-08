@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QThread, Signal
-from typing import Optional, Any
 
 
 class AIWorker(QThread):

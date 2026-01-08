@@ -15,7 +15,7 @@ except ImportError:  # pragma: no cover - optional dependency
     sr = None  # type: ignore[assignment]
 
 from PySide6.QtCore import Qt, Signal, QThread, QObject, QSize, QTimer, QPropertyAnimation, QEasingCurve, QPoint, QUrl, QRect
-from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QPainter, QPixmap, QTextCursor, QDesktopServices, QCursor, QPen, QPainterPath, QImage
+from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap, QTextCursor, QDesktopServices, QCursor, QPen, QPainterPath, QImage
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -33,12 +33,10 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QFileDialog,
     QMenu,
-    QInputDialog,
     QLineEdit,
     QSizePolicy,
     QDialogButtonBox,
     QGraphicsDropShadowEffect, QWidgetAction,
-    QCheckBox,
 )
 
 from . import design
@@ -421,9 +419,11 @@ class MainWindow(QMainWindow):
         self.chat_transcript_layout.addWidget(row, 0)
         self.chat_transcript_layout.addStretch(1)
     def _chat_add_message(self, role: str, content: str) -> None:
-        """Add a message to the current chat, update UI, and persist immediately."""
+        """Add a message to the current chat, update UI, and persist immediately. Also auto-scrolls chat to bottom."""
         # Add to UI
         self._add_message_to_ui_only(role, content)
+        # Auto-scroll to bottom after adding message
+        self._scroll_chat_to_bottom()
         # Add to chat data
         for chat in self._chats:
             if chat.get("id") == self._current_chat_id:
@@ -434,6 +434,29 @@ class MainWindow(QMainWindow):
         # Persist immediately
         self._save_current_chat_state()
         self._schedule_persist()
+
+    def _scroll_chat_to_bottom(self):
+        """Scroll the chat transcript area to the bottom."""
+        try:
+            if hasattr(self, 'chat_transcript_scroll') and self.chat_transcript_scroll:
+                # If using QScrollArea for chat transcript
+                scroll = self.chat_transcript_scroll.verticalScrollBar()
+                scroll.setValue(scroll.maximum())
+            elif hasattr(self, 'chat_transcript') and isinstance(self.chat_transcript, QTextEdit):
+                # If using QTextEdit for chat transcript
+                self.chat_transcript.moveCursor(QTextCursor.End)
+                self.chat_transcript.ensureCursorVisible()
+            # If using a custom widget/layout, try to update geometry and scroll
+            elif hasattr(self, 'chat_transcript_layout'):
+                # Try to find parent scroll area
+                parent = getattr(self, 'chat_transcript_layout').parentWidget()
+                while parent:
+                    if isinstance(parent, QScrollArea):
+                        parent.verticalScrollBar().setValue(parent.verticalScrollBar().maximum())
+                        break
+                    parent = parent.parentWidget()
+        except Exception as e:
+            print(f"[MainWindow] Auto-scroll failed: {e}")
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Nova AI")
@@ -4637,10 +4660,6 @@ class MainWindow(QMainWindow):
     
     <div class="error-message">
         {message}
-    </div>
-    
-    <div class="help-text">
-        <strong>도움말:</strong> Windows에서 한글이 실행 중인지 확인하세요. 문서가 열려있고 커서가 입력 가능한 위치에 있어야 합니다.
     </div>
 </div>
 """
