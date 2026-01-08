@@ -338,6 +338,32 @@ class ScriptWorker(QThread):
 
 
 class MainWindow(QMainWindow):
+    def _show_welcome_message(self):
+        self._clear_chat_transcript()
+        row = QWidget()
+        row_lyt = QHBoxLayout(row)
+        row_lyt.setContentsMargins(0, 0, 0, 0)
+        row_lyt.setSpacing(0)
+        label = QLabel("무엇이든 물어보세요")
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label.setStyleSheet("font-size: 28px; color: #000; font-weight: 700; margin: 32px 0;")
+        row_lyt.addWidget(label, 0, Qt.AlignmentFlag.AlignCenter)
+        self.chat_transcript_layout.addWidget(row, 0)
+        self.chat_transcript_layout.addStretch(1)
+    def _chat_add_message(self, role: str, content: str) -> None:
+        """Add a message to the current chat, update UI, and persist immediately."""
+        # Add to UI
+        self._add_message_to_ui_only(role, content)
+        # Add to chat data
+        for chat in self._chats:
+            if chat.get("id") == self._current_chat_id:
+                if "messages" not in chat or not isinstance(chat["messages"], list):
+                    chat["messages"] = []
+                chat["messages"].append({"role": role, "content": content})
+                break
+        # Persist immediately
+        self._save_current_chat_state()
+        self._schedule_persist()
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Nova AI")
@@ -355,7 +381,7 @@ class MainWindow(QMainWindow):
         self.dark_mode = False
         self.chatgpt = ChatGPTHelper()  # Legacy support
         self.ai_helper = MultiModelAIHelper()  # New multi-model helper
-        self.current_model = self.ai_helper.get_cheapest_model() or "gpt-4o-mini"  # Default to cheapest
+        self.current_model = self.ai_helper.get_cheapest_model() or "gpt-5-nano"  # Default to cheapest
         self.backup_manager = BackupManager()  # Initialize backup manager
         # Profile defaults (ensure drawer/profile UI can be built safely)
         self.profile_display_name = "사용자"
@@ -384,6 +410,12 @@ class MainWindow(QMainWindow):
         self._progress_timer.timeout.connect(self._animate_progress_fade)
         # Drawer animation object (persisted to avoid GC & make single-click reliable)
         self._drawer_anim: QPropertyAnimation | None = None
+        
+        # Set application-wide font to Pretendard
+        app_font = QFont("Pretendard")
+        app_font.setPointSize(14)
+        self.setFont(app_font)
+        
         self._build_ui()
         self._apply_styles()
         # Load persisted state (e.g., selected model) from disk and apply
@@ -391,8 +423,12 @@ class MainWindow(QMainWindow):
             self._load_persisted_state()
         except Exception:
             pass
-        # Ensure at least one default chat exists
-        self._ensure_default_chat()
+        # Always clear current chat ID at startup and show welcome message
+        self._current_chat_id = None
+        self._show_welcome_message()
+        # Render chat list if there are existing chats
+        if self._chats:
+            self._render_chat_list()
         # Apply responsive UI tweaks immediately and on resize
         self._apply_responsive_layout()
         self._hwp_detection_timer.start(500)  # Check every 500ms
@@ -500,6 +536,8 @@ class MainWindow(QMainWindow):
         on-disk JSON so state survives simple restarts during development.
         """
         try:
+            # Always save the current chat's state (including messages) before persisting
+            self._save_current_chat_state()
             self._persist_timer.start(400)
         except Exception:
             pass
@@ -511,6 +549,8 @@ class MainWindow(QMainWindow):
         UI operations.
         """
         try:
+            # Always save the current chat's state (including messages) before persisting
+            self._save_current_chat_state()
             storage = Path.home() / ".formulite_chats.json"
             import json
             data = {"chats": self._chats, "current": self._current_chat_id, "model": getattr(self, '_current_model', None)}
@@ -554,67 +594,21 @@ class MainWindow(QMainWindow):
                     print(f"[Persist] Model set to: {model}")
                 except Exception:
                     pass
+            # Restore messages for the current chat if available
+            if self._current_chat_id:
+                for chat in self._chats:
+                    if chat.get("id") == self._current_chat_id:
+                        self._restore_chat_messages(chat)
+                        break
         except Exception as e:
             print(f"[Persist] Failed to load persisted state: {e}")
 
     def _ensure_default_chat(self) -> None:
-        """Ensure at least one default chat exists on startup."""
+        """No longer activates or selects any chat by default. Only renders chat list."""
         try:
             print(f"[MainWindow] _ensure_default_chat called. Current chats: {len(self._chats)}")
-            if len(self._chats) == 0:
-                # Create a default chat
-                import uuid
-                import time
-                new_id = str(uuid.uuid4())
-                now = time.time()
-                default_chat = {
-                    "id": new_id,
-                    "title": "New chat",
-                    "log": "",
-                    "script": DEFAULT_SCRIPT.strip(),
-                    "messages": [],
-                    "created_at": now,
-                    "updated_at": now,
-                }
-                self._chats.append(default_chat)
-                self._current_chat_id = new_id
-                print(f"[MainWindow] Created default chat: {new_id}")
-                
-                # Delay rendering to ensure UI is fully initialized
-                def activate_and_render():
-                    try:
-                        # Render the chat list to show the new chat
-                        self._render_chat_list()
-                        # Activate the default chat so it's ready to use (don't close drawer on startup)
-                        self._activate_chat(new_id, close_drawer=False)
-                        print(f"[MainWindow] ✅ Default chat activated and ready!")
-                    except Exception as e:
-                        print(f"[MainWindow] Error in delayed activation: {e}")
-                
-                QTimer.singleShot(100, activate_and_render)
-            else:
-                print(f"[MainWindow] Chats already exist ({len(self._chats)}), not creating default")
-                
-                # Always render existing chats
-                def render_and_activate_existing():
-                    try:
-                        # Render the chat list to show all loaded chats
-                        self._render_chat_list()
-                        
-                        # If no chat is active, activate the first one
-                        if not self._current_chat_id and self._chats:
-                            first_chat_id = self._chats[0].get("id")
-                            if first_chat_id:
-                                self._activate_chat(first_chat_id, close_drawer=False)
-                                print(f"[MainWindow] ✅ Activated first existing chat: {first_chat_id}")
-                        elif self._current_chat_id:
-                            # Current chat already set, just activate it
-                            self._activate_chat(self._current_chat_id, close_drawer=False)
-                            print(f"[MainWindow] ✅ Activated current chat: {self._current_chat_id}")
-                    except Exception as e:
-                        print(f"[MainWindow] Error rendering/activating existing chats: {e}")
-                
-                QTimer.singleShot(100, render_and_activate_existing)
+            self._current_chat_id = None
+            self._render_chat_list()
         except Exception as e:
             print(f"[MainWindow] Error ensuring default chat: {e}")
 
@@ -660,7 +654,9 @@ class MainWindow(QMainWindow):
                 btn.setMinimumHeight(28)
                 try:
                     orig_btn_style = btn.styleSheet() if hasattr(btn, 'styleSheet') else ""
-                    btn.setStyleSheet((orig_btn_style or "") + "padding-top:-5px; padding-left:12px;")
+                    # Adjust padding based on theme
+                    padding_top = "2px" if self.dark_mode else "-5px"
+                    btn.setStyleSheet((orig_btn_style or "") + f"padding-top:{padding_top}; padding-left:12px;")
                 except Exception:
                     pass
                 font = btn.font()
@@ -1015,7 +1011,6 @@ class MainWindow(QMainWindow):
 
     def _activate_chat(self, chat_id: str, close_drawer: bool = True) -> None:
         """Activate the chat with the given id, loading its content into the UI.
-        
         Args:
             chat_id: The ID of the chat to activate
             close_drawer: Whether to close the drawer after activation (default: True)
@@ -1023,23 +1018,17 @@ class MainWindow(QMainWindow):
         try:
             for chat in self._chats:
                 if chat.get("id") == chat_id:
-                    # Save current chat's UI state before switching
-                    if self._current_chat_id:
-                        self._save_current_chat_state()
-                    
+                    # Do NOT save current chat's UI state here to avoid overwriting messages
                     # Switch to new chat
                     self._current_chat_id = chat_id
-                    
                     # Restore script and log
                     if hasattr(self, "script_edit"):
                         self.script_edit.setPlainText(chat.get("script", ""))
                     if hasattr(self, "log_output"):
                         self.log_output.setPlainText(chat.get("log", ""))
-                    
                     # Clear and restore chat transcript
                     self._clear_chat_transcript()
                     self._restore_chat_messages(chat)
-                    
                     self._render_chat_list()
                     if close_drawer:
                         self._set_drawer_open(False)
@@ -1059,7 +1048,7 @@ class MainWindow(QMainWindow):
                         chat["script"] = self.script_edit.toPlainText()
                     if hasattr(self, "log_output"):
                         chat["log"] = self.log_output.toPlainText()
-                    
+
                     # Save chat messages (excluding thinking animation)
                     messages = []
                     for role, row, bubble in self._chat_widgets:
@@ -1079,8 +1068,12 @@ class MainWindow(QMainWindow):
                                 messages.append({"role": role, "content": plain_text})
                         except Exception:
                             pass
-                    chat["messages"] = messages
-                    print(f"[MainWindow] Saved {len(messages)} messages for chat {self._current_chat_id}")
+                    # Only update messages if there are any in the UI; otherwise, leave as is
+                    if messages:
+                        chat["messages"] = messages
+                        print(f"[MainWindow] Saved {len(messages)} messages for chat {self._current_chat_id}")
+                    else:
+                        print(f"[MainWindow] No messages in UI, not overwriting chat history for chat {self._current_chat_id}")
                     return
         except Exception as e:
             print(f"[MainWindow] Error saving chat state: {e}")
@@ -1088,23 +1081,20 @@ class MainWindow(QMainWindow):
     def _clear_chat_transcript(self) -> None:
         """Clear all messages from the chat transcript UI."""
         try:
-            # Remove all chat widgets
-            for role, row, bubble in self._chat_widgets:
-                try:
-                    self.chat_transcript_layout.removeWidget(row)
-                    row.deleteLater()
-                except Exception:
+            # Remove all widgets from the layout (including welcome message)
+            while self.chat_transcript_layout.count():
+                item = self.chat_transcript_layout.takeAt(0)
+                if item.widget():
+                    item.widget().deleteLater()
+                elif item.spacerItem():
+                    # Don't delete spacer items, just remove them
                     pass
+            
+            # Clear chat widgets list
             self._chat_widgets.clear()
             
-            # Remove thinking widget if present
+            # Clear thinking widget reference if present
             if self._thinking_widget:
-                try:
-                    row, bubble = self._thinking_widget
-                    self.chat_transcript_layout.removeWidget(row)
-                    row.deleteLater()
-                except Exception:
-                    pass
                 self._thinking_widget = None
             
             # Re-add stretch
@@ -1546,8 +1536,8 @@ class MainWindow(QMainWindow):
         bottom_row.addWidget(self.ai_selector_btn)
 
         # Model label to the right of the flash/AI icon (hidden in simplified layout)
-        # Model label to the right of the flash/AI icon (hidden in simplified layout)
-        self.model_label = QLabel("gpt-5-nano")
+        initial_model = getattr(self, "current_model", None) or "gpt-5-nano"
+        self.model_label = QLabel(initial_model)
         self.model_label.setObjectName("model-label")
         self.model_label.setStyleSheet(
             "font-size: 14px; font-weight: 800; color: #0f1724;"
@@ -1557,7 +1547,7 @@ class MainWindow(QMainWindow):
         # Initialize current model state and ensure default selection is applied
         try:
             # Ensure everything (top display, bottom label, icon) is updated consistently
-            self._set_model(self.model_label.text())
+            self._set_model(initial_model)
         except Exception:
             try:
                 self._set_model("gpt-5-nano")
@@ -1651,31 +1641,6 @@ class MainWindow(QMainWindow):
             except Exception:
                 self.drawer_toggle_btn.setText("≡")
         top_bar_layout.addWidget(self.drawer_toggle_btn, alignment=Qt.AlignmentFlag.AlignLeft)
-        
-        # Model selection dropdown next to hamburger button
-        self.model_selector = QPushButton()
-        self.model_selector.setObjectName("model-selector")
-        self.model_selector.setToolTip("AI 모델 선택")
-        self.model_selector.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self._update_model_selector_text()
-        self.model_selector.clicked.connect(self._show_model_selection_menu)
-        self.model_selector.setStyleSheet("""
-            QPushButton#model-selector {
-                background: transparent;
-                border: 1px solid #e0e0e0;
-                border-radius: 6px;
-                padding: 6px 12px;
-                font-size: 13px;
-                font-weight: 600;
-                color: #424242;
-            }
-            QPushButton#model-selector:hover {
-                background: #f5f5f5;
-                border-color: #bdbdbd;
-            }
-        """)
-        top_bar_layout.addWidget(self.model_selector, alignment=Qt.AlignmentFlag.AlignLeft)
-        top_bar_layout.addSpacing(8)
         # Add spacing between hamburger and model display for better separation
         top_bar_layout.addSpacing(12)
 
@@ -1688,7 +1653,7 @@ class MainWindow(QMainWindow):
             h.setContentsMargins(0, 0, 0, 0)
             h.setSpacing(2)
             # Text label
-            self._top_model_text = QLabel("gpt-5-nano")
+            self._top_model_text = QLabel(getattr(self, "_current_model_display", None) or getattr(self, "current_model", "gpt-5-nano"))
             self._top_model_text.setObjectName("top-model-text")
             # Apply theme-aware styling (kept in one place so theme toggles don't drift).
             self._apply_top_model_text_style()
@@ -2091,6 +2056,9 @@ class MainWindow(QMainWindow):
         # expose for update when filter changes
         self.drawer_reset_btn = reset_btn
 
+        # Add spacing between "내 채팅" and the chat list
+        lyt.addSpacing(12)
+
         # Scrollable chat list
         scroll = QScrollArea()
         scroll.setObjectName("drawer-chat-scroll")
@@ -2391,66 +2359,6 @@ class MainWindow(QMainWindow):
     def _toggle_drawer(self) -> None:
         self._drawer_open = not getattr(self, "_drawer_open", False)
         self._apply_drawer_state(animate=True)
-    
-    def _update_model_selector_text(self) -> None:
-        """Update the model selector button text to show current model."""
-        if hasattr(self, 'model_selector'):
-            # Shorten model name for display
-            display_name = self.current_model.replace("-20240307", "").replace("-", " ")
-            if "gpt" in display_name.lower():
-                display_name = display_name.replace("gpt 4o mini", "GPT-4o Mini")
-            elif "gemini" in display_name.lower():
-                display_name = "Gemini Flash"
-            elif "claude" in display_name.lower():
-                display_name = "Claude Haiku"
-            elif "grok" in display_name.lower():
-                display_name = "Grok Beta"
-            self.model_selector.setText(f"🤖 {display_name}")
-    
-    def _show_model_selection_menu(self) -> None:
-        """Show a menu to select AI model."""
-        menu = QMenu(self)
-        menu.setStyleSheet("""
-            QMenu {
-                background: white;
-                border: 1px solid #e0e0e0;
-                border-radius: 8px;
-                padding: 4px;
-            }
-            QMenu::item {
-                padding: 8px 16px;
-                border-radius: 4px;
-            }
-            QMenu::item:selected {
-                background: #f5f5f5;
-            }
-        """)
-        
-        # Get available models
-        available_models = self.ai_helper.get_available_models()
-        
-        if not available_models:
-            no_models_action = menu.addAction("⚠️ API 키가 설정되지 않았습니다")
-            no_models_action.setEnabled(False)
-        else:
-            for model_id, description, cost in available_models:
-                # Show checkmark for current model
-                prefix = "✓ " if model_id == self.current_model else "   "
-                action_text = f"{prefix}{description}"
-                action = menu.addAction(action_text)
-                action.setData(model_id)
-                action.triggered.connect(lambda checked=False, m=model_id: self._select_model(m))
-        
-        # Show menu below the button
-        menu.exec(self.model_selector.mapToGlobal(
-            QPoint(0, self.model_selector.height())
-        ))
-    
-    def _select_model(self, model_id: str) -> None:
-        """Select a different AI model."""
-        self.current_model = model_id
-        self._update_model_selector_text()
-        print(f"[MainWindow] Selected model: {model_id}")
 
     def _apply_drawer_state(self, animate: bool = True) -> None:
         if not hasattr(self, "drawer_panel") or not hasattr(self, "drawer_overlay"):
@@ -2753,8 +2661,12 @@ class MainWindow(QMainWindow):
                     # Keep a compact model display visible on narrow windows and preserve the arrow icon
                     if hasattr(self, "top_model_display"):
                         try:
-                            # Prefer the canonical _current_model so compacting doesn't remove important qualifiers
-                            full = getattr(self, "_current_model", None) or (self.model_label.text() if hasattr(self, "model_label") else (self.top_model_display.text() if hasattr(self.top_model_display, 'text') else ""))
+                            # Prefer the display label, then canonical id so compacting doesn't remove important qualifiers
+                            full = (
+                                getattr(self, "_current_model_display", None)
+                                or getattr(self, "_current_model", None)
+                                or (self.model_label.text() if hasattr(self, "model_label") else (self.top_model_display.text() if hasattr(self.top_model_display, 'text') else ""))
+                            )
                             compact = full if len(full) <= 12 else full[:12]
                             self.top_model_display.setText(compact)
                             try:
@@ -3459,13 +3371,13 @@ class MainWindow(QMainWindow):
         if self._worker and self._worker.isRunning():
             self._show_info_dialog("진행 중", "이미 작업을 실행 중입니다.")
             return
-        
+
         # Get natural language input from user
         user_input = self.script_edit.toPlainText().strip()
         if not user_input:
             self._show_info_dialog("입력 필요", "무엇을 하고 싶으신지 입력해주세요.")
             return
-        
+
         # Check if ChatGPT is available
         if not self.ai_helper.is_available():
             self._show_error_dialog(
@@ -3473,11 +3385,27 @@ class MainWindow(QMainWindow):
                 "API 키를 설정해주세요. 자세한 사항은 개발진에게 문의해주세요."
             )
             return
-        
+
+        # If no chat is selected, create a new chat, otherwise append to current chat
+        if not self._current_chat_id or not any(chat.get("id") == self._current_chat_id for chat in self._chats):
+            new_id = str(uuid.uuid4())
+            now = time.time()
+            new_chat = {
+                "id": new_id,
+                "title": "새 채팅",
+                "log": "",
+                "script": DEFAULT_SCRIPT.strip(),
+                "messages": [],
+                "created_at": now,
+                "updated_at": now,
+            }
+            self._snapshot_current_chat()
+            self._chats.insert(0, new_chat)
+            self._current_chat_id = new_id
+            self._activate_chat(new_id)
         # Clear input field
         self.script_edit.setPlainText("")
-        
-        # Generate code with AI and auto-execute
+        # Generate code with AI and auto-execute (it will add the user message internally)
         self._generate_and_execute_with_ai(user_input)
 
     def _handle_error(self, message: str) -> None:
@@ -3661,19 +3589,48 @@ class MainWindow(QMainWindow):
             print(f"Error removing image preview: {e}")
 
     def _set_model(self, model_name: str) -> None:
-        """Set the active model and update UI labels."""
+        """Set the active model (canonical + display) and update UI labels."""
         try:
-            name = model_name.lower()
-            self._current_model = name
+            raw = (model_name or "").strip()
+            normalized = raw.lower()
+
+            # Map friendly/short names to canonical cheapest vision-capable models
+            canonical_map = {
+                "gpt": "gpt-5-nano",
+                "gpt-4o-mini": "gpt-5-nano",
+                "gpt-4o-mini-2024-08-06": "gpt-5-nano",
+                "gpt-5-nano": "gpt-5-nano",
+                "gemini": "gemini-2.0-flash",
+                "gemini-1.5-flash": "gemini-2.0-flash",
+                "gemini-2.0-flash": "gemini-2.0-flash",
+                "claude": "claude-3-haiku-20240307",
+                "claude-3-haiku": "claude-3-haiku-20240307",
+                "claude-3-haiku-20240307": "claude-3-haiku-20240307",
+            }
+            canonical = canonical_map.get(normalized, raw if raw else "gpt-5-nano")
+
+            # User-facing display text (keep short while hinting variant)
+            display_map = {
+                "gpt-5-nano": "gpt-5-nano",
+                "gemini-2.0-flash": "gemini-2.0-flash",
+                "claude-3-haiku-20240307": "claude-3-haiku",
+            }
+            display = display_map.get(canonical, canonical)
+
+            self._current_model = canonical
+            self._current_model_display = display
+            # Keep current_model in sync for AIWorker
+            self.current_model = canonical
+
             if hasattr(self, "model_label"):
                 try:
-                    self.model_label.setText(name)
+                    self.model_label.setText(display)
                 except Exception:
                     pass
             if hasattr(self, "top_model_display"):
                 try:
                     # Update text (no extra caret) and refresh chevron icon color to match theme
-                    self.top_model_display.setText(name)
+                    self.top_model_display.setText(display)
                     try:
                         self._set_top_model_chevron()
                     except Exception:
@@ -3730,13 +3687,11 @@ class MainWindow(QMainWindow):
                 """
             )
 
-            # Model families and human-friendly descriptions
+            # Model families and human-friendly descriptions (cheapest vision-capable tiers)
             models = [
-                ("gpt-5-nano", "GPT — compact, fast, low-cost"),
-                ("gpt-4o", "GPT — general-purpose conversational model"),
-                ("gemini", "Gemini — strong reasoning and multimodal capabilities"),
-                ("grok", "Grok — fast, developer-oriented chat model"),
-                ("claude-2", "Claude — assistant optimized for long-context tasks"),
+                ("gpt-5-nano", "GPT (gpt-5-nano) — 전반적인 업무 능력이 좋고, 가장 저렴합니다."),
+                ("gemini-2.0-flash", "Gemini 2.0 Flash — 이미지 처리 능력이 좋고, 속도가 빠릅니다."),
+                ("claude-3-haiku-20240307", "Claude 3 Haiku — 수식 설명에 강하고, 창의적인 업무에 유용합니다."),
             ]
 
             # Create rich menu rows using QWidgetAction
@@ -3750,7 +3705,9 @@ class MainWindow(QMainWindow):
                 name_lbl = QLabel(m)
                 name_lbl.setStyleSheet(f"font-weight:600; font-size:13px; color:{name_color};")
                 desc_lbl = QLabel(desc)
-                desc_lbl.setStyleSheet(f"font-size:12px; color:{desc_color};")
+                # Use a slightly darker gray for better visibility
+                improved_gray = "#7a869a" if not getattr(self, "dark_mode", False) else "#b0b8c1"
+                desc_lbl.setStyleSheet(f"font-size:12px; color:{improved_gray};")
                 v.addWidget(name_lbl)
                 v.addWidget(desc_lbl)
                 row_layout.addLayout(v)
@@ -4336,133 +4293,188 @@ class MainWindow(QMainWindow):
         dialog = QDialog(self)
         dialog.setWindowTitle("코드 입력")
         dialog.setModal(True)
-        dialog.setMinimumSize(700, 500)
+        dialog.setMinimumSize(400, 400)
+        dialog.resize(420, 420)
         
-        # Set dialog background color (theme-aware)
-        dialog.setStyleSheet("""
-            QDialog {
-                background-color: %s;
-            }
-        """ % ("#1a1a1a" if self.dark_mode else "#ffffff"))
+        # Modern dialog styling with rounded corners and shadow effect
+        bg_color = "#0f0f0f" if self.dark_mode else "#ffffff"
+        border_color = "#2a2a2a" if self.dark_mode else "#e5e7eb"
+        dialog.setStyleSheet(f"""
+            QDialog {{
+                background-color: {bg_color};
+                border: 1px solid {border_color};
+                border-radius: 16px;
+            }}
+        """)
         
-        # Create main layout
+        # Create main layout with better spacing
         main_layout = QVBoxLayout(dialog)
-        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout.setContentsMargins(24, 28, 24, 20)
         main_layout.setSpacing(16)
         
-        # Title label
+        # Header section with icon and title
+        header_layout = QVBoxLayout()
+        header_layout.setSpacing(8)
+        
+        # Title with better typography
         title_label = QLabel("Python 코드 입력")
-        title_label.setStyleSheet("""
-            QLabel {
-                color: %s;
-                font-size: 18px;
-                font-weight: 700;
-            }
-        """ % ("#ffffff" if self.dark_mode else "#1f2937"))
-        main_layout.addWidget(title_label)
+        title_label.setStyleSheet(f"""
+            QLabel {{
+                color: {'#ffffff' if self.dark_mode else '#111827'};
+                font-size: 20px;
+                font-weight: 800;
+                font-family: 'Pretendard', sans-serif;
+                letter-spacing: -0.5px;
+            }}
+        """)
+        header_layout.addWidget(title_label)
         
-        # Description label
-        desc_label = QLabel("한글 문서 자동화를 위한 Python 코드를 작성하세요. 사용 가능한 함수: insert_text(), insert_paragraph(), insert_equation(), insert_table() 등")
+        # Description with better styling
+        desc_label = QLabel("한글 문서 자동화를 위한 Python 코드를 작성하세요.\n사용 가능한 함수는 LaTeX 가이드를 참고하세요.")
         desc_label.setWordWrap(True)
-        desc_label.setStyleSheet("""
-            QLabel {
-                color: %s;
-                font-size: 13px;
-            }
-        """ % ("#9ca3af" if self.dark_mode else "#6b7280"))
-        main_layout.addWidget(desc_label)
+        desc_label.setStyleSheet(f"""
+            QLabel {{
+                color: {'#9ca3af' if self.dark_mode else '#6b7280'};
+                font-size: 14px;
+                font-weight: 400;
+                font-family: 'Pretendard', sans-serif;
+                line-height: 1.5;
+            }}
+        """)
+        header_layout.addWidget(desc_label)
+        main_layout.addLayout(header_layout)
         
-        # Code editor
+        # Code editor with modern styling
         code_editor = QTextEdit()
         code_editor.setObjectName("code-input-editor")
-        code_editor.setPlaceholderText("# Python 코드를 입력하세요\n# 예: insert_text('Hello World')")
+        code_editor.setPlaceholderText("# Python 코드를 입력하세요\n# 예: insert_text('Hello World')\n#     insert_paragraph()\n#     insert_equation('x^2 + y^2 = z^2')")
         code_editor.setPlainText("")
-        code_editor.setMinimumHeight(300)
+        code_editor.setMinimumHeight(240)
         
-        # Apply theme to code editor
-        theme_name = "dark" if self.dark_mode else "light"
-        theme_qss = _load_theme(theme_name)
-        code_editor.setStyleSheet(theme_qss)
+        # Enhanced code editor styling
+        editor_bg = "#1a1a1a" if self.dark_mode else "#f9fafb"
+        editor_border = "#3a3a3a" if self.dark_mode else "#e5e7eb"
+        editor_text = "#e5e7eb" if self.dark_mode else "#111827"
+        editor_placeholder = "#6b7280" if self.dark_mode else "#9ca3af"
         
-        main_layout.addWidget(code_editor)
+        code_editor.setStyleSheet(f"""
+            QTextEdit#code-input-editor {{
+                background-color: {editor_bg};
+                border: 2px solid {editor_border};
+                border-radius: 12px;
+                padding: 12px;
+                color: {editor_text};
+                font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+                font-size: 13px;
+                line-height: 1.6;
+                selection-background-color: {'#3b82f6' if self.dark_mode else '#3b82f6'};
+                selection-color: #ffffff;
+            }}
+            QTextEdit#code-input-editor:focus {{
+                border: 2px solid {'#3b82f6' if self.dark_mode else '#2563eb'};
+                background-color: {editor_bg};
+            }}
+            QTextEdit#code-input-editor::placeholder {{
+                color: {editor_placeholder};
+            }}
+        """)
         
-        # Button row
+        main_layout.addWidget(code_editor, 1)  # Stretch factor
+        
+        # Button row with improved styling
         button_row = QHBoxLayout()
         button_row.setSpacing(12)
+        button_row.setContentsMargins(0, 8, 0, 0)
         
-        # LaTeX helper button (left side)
+        # LaTeX helper button with modern design
         latex_btn = QPushButton("LaTeX 가이드")
         latex_btn.setObjectName("latex-helper-button")
-        latex_btn.setMinimumWidth(110)
-        latex_btn.setMinimumHeight(40)
+        latex_btn.setMinimumWidth(100)
+        latex_btn.setMinimumHeight(44)
         latex_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        latex_btn.setStyleSheet("""
-            QPushButton#latex-helper-button {
-                background: transparent;
-                border: 1px solid %s;
-                color: %s;
+        
+        latex_bg = "#1f1f1f" if self.dark_mode else "#f3f4f6"
+        latex_border = "#3a3a3a" if self.dark_mode else "#d1d5db"
+        latex_text = "#e5e7eb" if self.dark_mode else "#374151"
+        latex_hover = "#2a2a2a" if self.dark_mode else "#e5e7eb"
+        
+        latex_btn.setStyleSheet(f"""
+            QPushButton#latex-helper-button {{
+                background-color: {latex_bg};
+                border: 1.5px solid {latex_border};
+                color: {latex_text};
                 font-weight: 600;
-                font-size: 15px;
-                padding: 8px 16px;
-                border-radius: 8px;
-            }
-            QPushButton#latex-helper-button:hover {
-                background: %s;
-            }
-        """ % (
-            ("#374151", "#ffffff", "#1f1f1f") if self.dark_mode else ("#d1d5db", "#374151", "#f3f4f6")
-        ))
+                font-size: 14px;
+                padding: 10px 20px;
+                border-radius: 10px;
+                font-family: 'Pretendard', sans-serif;
+            }}
+            QPushButton#latex-helper-button:hover {{
+                background-color: {latex_hover};
+                border-color: {'#4a4a4a' if self.dark_mode else '#9ca3af'};
+            }}
+            QPushButton#latex-helper-button:pressed {{
+                background-color: {'#2a2a2a' if self.dark_mode else '#e5e7eb'};
+            }}
+        """)
         latex_btn.clicked.connect(self._show_latex_helper)
         button_row.addWidget(latex_btn)
         
         button_row.addStretch()
         
-        # Cancel button
+        # Cancel button with refined styling
         cancel_btn = QPushButton("취소")
         cancel_btn.setObjectName("secondary-button")
         cancel_btn.setMinimumWidth(80)
-        cancel_btn.setMinimumHeight(40)
+        cancel_btn.setMinimumHeight(44)
         cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        cancel_btn.setStyleSheet("""
-            QPushButton#secondary-button {
-                background: transparent;
+        
+        cancel_text = "#9ca3af" if self.dark_mode else "#6b7280"
+        cancel_hover = "#2a2a2a" if self.dark_mode else "#f3f4f6"
+        
+        cancel_btn.setStyleSheet(f"""
+            QPushButton#secondary-button {{
+                background-color: transparent;
                 border: none;
-                color: %s;
+                color: {cancel_text};
                 font-weight: 600;
-                font-size: 15px;
-                padding: 8px 16px;
-                border-radius: 8px;
-            }
-            QPushButton#secondary-button:hover {
-                background: %s;
-            }
-        """ % (
-            ("#9ca3af", "#1f1f1f") if self.dark_mode else ("#6b7280", "#f3f4f6")
-        ))
+                font-size: 14px;
+                padding: 10px 20px;
+                border-radius: 10px;
+                font-family: 'Pretendard', sans-serif;
+            }}
+            QPushButton#secondary-button:hover {{
+                background-color: {cancel_hover};
+            }}
+            QPushButton#secondary-button:pressed {{
+                background-color: {'#1f1f1f' if self.dark_mode else '#e5e7eb'};
+            }}
+        """)
         cancel_btn.clicked.connect(dialog.reject)
         button_row.addWidget(cancel_btn)
         
-        # Run button
-        run_btn = QPushButton("실행")
+        # Run button with modern primary action styling
+        run_btn = QPushButton("▶ 실행")
         run_btn.setObjectName("primary-action")
-        run_btn.setMinimumWidth(90)
-        run_btn.setMinimumHeight(40)
+        run_btn.setMinimumWidth(100)
+        run_btn.setMinimumHeight(44)
         run_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         run_btn.setStyleSheet("""
             QPushButton#primary-action {
-                background-color: #4169e1;
+                background-color: #3b82f6;
                 color: #ffffff;
                 border: none;
-                border-radius: 8px;
+                border-radius: 10px;
                 font-weight: 700;
-                font-size: 15px;
-                padding: 8px 20px;
+                font-size: 14px;
+                padding: 10px 24px;
+                font-family: 'Pretendard', sans-serif;
             }
             QPushButton#primary-action:hover {
-                background-color: #5177e8;
+                background-color: #2563eb;
             }
             QPushButton#primary-action:pressed {
-                background-color: #3459c9;
+                background-color: #1d4ed8;
             }
         """)
         
@@ -4954,62 +4966,6 @@ class MainWindow(QMainWindow):
             """
         )
 
-    def _chat_add_message(self, role: str, text: str) -> None:
-        """Append a ChatGPT-style message bubble above the input."""
-        self._ensure_chat_transcript_visible()
-
-        # Remove the stretch spacer at the end, append, then add it back.
-        try:
-            if self.chat_transcript_layout.count() > 0:
-                last_item = self.chat_transcript_layout.itemAt(self.chat_transcript_layout.count() - 1)
-                if last_item and last_item.spacerItem():
-                    self.chat_transcript_layout.takeAt(self.chat_transcript_layout.count() - 1)
-        except Exception:
-            pass
-
-        row = QWidget()
-        row.setObjectName("chat-row")
-        row_lyt = QHBoxLayout(row)
-        row_lyt.setContentsMargins(0, 0, 0, 0)
-        row_lyt.setSpacing(0)
-
-        bubble = QLabel()
-        bubble.setObjectName("chat-bubble")
-        bubble.setWordWrap(True)
-        bubble.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        bubble.setTextFormat(Qt.TextFormat.RichText)
-        bubble.setMaximumWidth(520)
-
-        # Simple HTML escape + preserve newlines
-        safe = (
-            (text or "")
-            .replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-            .replace("\n", "<br/>")
-        )
-        bubble.setText(safe)
-        self._apply_chat_bubble_style(role, bubble)
-
-        if role == "user":
-            row_lyt.addStretch(1)
-            row_lyt.addWidget(bubble, 0, Qt.AlignmentFlag.AlignRight)
-        else:
-            row_lyt.addWidget(bubble, 0, Qt.AlignmentFlag.AlignLeft)
-            row_lyt.addStretch(1)
-
-        self.chat_transcript_layout.addWidget(row, 0)
-        self.chat_transcript_layout.addStretch(1)
-        self._chat_widgets.append((role, row, bubble))
-
-        # Save message to current chat
-        self._save_message_to_current_chat(role, text)
-
-        # Scroll to bottom
-        try:
-            QTimer.singleShot(0, lambda: self.chat_scroll.verticalScrollBar().setValue(self.chat_scroll.verticalScrollBar().maximum()))
-        except Exception:
-            pass
 
     def _save_message_to_current_chat(self, role: str, text: str) -> None:
         """Save a message to the current chat's messages list."""
@@ -5635,6 +5591,11 @@ class MainWindow(QMainWindow):
         # Create worker and thread
         print("[MainWindow] Creating QThread and AIWorker...")
         ai_thread = QThread()
+        
+        # Track if image is being used
+        self._last_image_used = bool(image_path)
+        print(f"[MainWindow] Image used: {self._last_image_used}")
+        
         ai_worker = AIWorker(
             self.ai_helper, 
             "generate", 
@@ -5807,6 +5768,11 @@ class MainWindow(QMainWindow):
         # Create worker and thread
         print("[MainWindow] Creating QThread and AIWorker...")
         ai_thread = QThread()
+        
+        # Track if image is being used
+        self._last_image_used = bool(image_path)
+        print(f"[MainWindow] Image used: {self._last_image_used}")
+        
         ai_worker = AIWorker(
             self.ai_helper, 
             "generate", 
@@ -5861,6 +5827,12 @@ class MainWindow(QMainWindow):
         # Clear selected files after successful generation (AI has processed the image)
         if self.selected_files:
             print(f"[MainWindow] Clearing selected_files after AI generation: {self.selected_files}")
+            # Clear the preview widgets from UI
+            while self.image_preview_layout.count() > 0:
+                widget = self.image_preview_layout.takeAt(0)
+                if widget and widget.widget():
+                    widget.widget().deleteLater()
+            self.image_preview_container.hide()
             self.selected_files.clear()
         
         # Parse all sections from response
@@ -5879,6 +5851,12 @@ class MainWindow(QMainWindow):
         
         code = extract_section(generated_code, "CODE")
         description = extract_section(generated_code, "DESCRIPTION")
+        
+        # Validation: If image was used, check if description has line listings
+        if hasattr(self, '_last_image_used') and self._last_image_used:
+            if "📋 Line" not in description and "Line 1:" not in description:
+                print("[WARNING] AI did not list lines from image! May have missed content.")
+                # Don't reject - just log the warning
         
         # Wait for animation to complete before clearing
         def finish_animation():

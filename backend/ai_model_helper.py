@@ -35,8 +35,8 @@ class MultiModelAIHelper:
     
     # Model pricing per 1M tokens (input/output) - using cheapest models
     PRICING = {
-        "gpt-4o-mini": {"input": 0.150, "output": 0.600},
-        "gemini-1.5-flash": {"input": 0.075, "output": 0.300},
+        "gpt-5-nano": {"input": 0.150, "output": 0.600},
+        "gemini-2.0-flash": {"input": 0.075, "output": 0.300},
         "grok-beta": {"input": 5.000, "output": 15.000},  # Currently expensive
         "claude-3-haiku": {"input": 0.250, "output": 1.250},
     }
@@ -93,7 +93,7 @@ class MultiModelAIHelper:
         if self.api_keys.get("google") and genai is not None:
             try:
                 genai.configure(api_key=self.api_keys["google"])
-                self.gemini_model = genai.GenerativeModel("gemini-1.5-flash")
+                self.gemini_model = genai.GenerativeModel("gemini-2.0-flash")
                 print("[MultiModelAI] Gemini client initialized!")
             except Exception as e:
                 print(f"[MultiModelAI] Failed to initialize Gemini: {e}")
@@ -117,25 +117,12 @@ class MultiModelAIHelper:
         """
         models = []
         
+        # Priority order: GPT (most reliable) → Grok (real-time) → Claude → Gemini
         if self.openai_client:
             models.append((
-                "gpt-4o-mini",
-                "GPT-4o Mini — 빠르고 저렴한 범용 모델",
-                self.PRICING["gpt-4o-mini"]["input"]
-            ))
-        
-        if self.gemini_model:
-            models.append((
-                "gemini-1.5-flash",
-                "Gemini 1.5 Flash — 최저가 고성능 모델",
-                self.PRICING["gemini-1.5-flash"]["input"]
-            ))
-        
-        if self.anthropic_client:
-            models.append((
-                "claude-3-haiku",
-                "Claude 3 Haiku — 빠르고 정확한 모델",
-                self.PRICING["claude-3-haiku"]["input"]
+                "gpt-5-nano",
+                "GPT-5 Nano — 빠르고 저렴한 범용 모델",
+                self.PRICING["gpt-5-nano"]["input"]
             ))
         
         if self.xai_client:
@@ -145,8 +132,21 @@ class MultiModelAIHelper:
                 self.PRICING["grok-beta"]["input"]
             ))
         
-        # Sort by price (cheapest first)
-        models.sort(key=lambda x: x[2])
+        if self.anthropic_client:
+            models.append((
+                "claude-3-haiku",
+                "Claude 3 Haiku — 빠르고 정확한 모델",
+                self.PRICING["claude-3-haiku"]["input"]
+            ))
+        
+        if self.gemini_model:
+            models.append((
+                "gemini-2.0-flash",
+                "Gemini 2.0 Flash — 최저가 고성능 모델",
+                self.PRICING["gemini-2.0-flash"]["input"]
+            ))
+        
+        # Return in priority order (don't sort by price since GPT is cheaper than Grok)
         return models
     
     def get_cheapest_model(self) -> Optional[str]:
@@ -203,7 +203,7 @@ class MultiModelAIHelper:
             print(f"[MultiModelAI] Failed to encode image: {e}")
             return None
 
-    def _call_openai(self, prompt: str, model: str = "gpt-4o-mini", image_base64: Optional[str] = None, max_retries: int = 3) -> Optional[str]:
+    def _call_openai(self, prompt: str, model: str = "gpt-5-nano", image_base64: Optional[str] = None, max_retries: int = 3) -> Optional[str]:
         """Call OpenAI API."""
         if not self.openai_client:
             return None
@@ -231,14 +231,14 @@ class MultiModelAIHelper:
                     response = self.openai_client.chat.completions.create(
                         model=model,
                         messages=messages,
-                        max_tokens=2000
+                        max_completion_tokens=2000
                     )
                 else:
                     # Text-only request
                     response = self.openai_client.chat.completions.create(
                         model=model,
                         messages=[{"role": "user", "content": prompt}],
-                        max_tokens=2000
+                        max_completion_tokens=2000
                     )
                 
                 if response.choices:
@@ -249,14 +249,28 @@ class MultiModelAIHelper:
                 
             except Exception as e:
                 error_name = type(e).__name__
-                if "RateLimitError" in error_name or "rate" in str(e).lower():
+                error_msg = str(e)
+                print(f"[MultiModelAI] OpenAI {error_name}: {error_msg}")
+                
+                if "RateLimitError" in error_name or "rate" in error_msg.lower():
                     if attempt < max_retries - 1:
                         wait_time = (2 ** attempt) + 1
                         print(f"[MultiModelAI] Rate limit, waiting {wait_time}s...")
                         time.sleep(wait_time)
                         continue
-                print(f"[MultiModelAI] OpenAI error: {e}")
-                return None
+                
+                # Log model not found errors specifically
+                if "model_not_found" in error_msg.lower() or "not found" in error_msg.lower():
+                    print(f"[MultiModelAI] Model '{model}' not found. Available models should be checked.")
+                    print(f"[MultiModelAI] Full error: {error_msg}")
+                
+                if attempt < max_retries - 1:
+                    wait_time = 1 + (attempt * 0.5)
+                    print(f"[MultiModelAI] Retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+                    
+        print(f"[MultiModelAI] All {max_retries} attempts failed for model {model}")
         return None
 
     def _call_anthropic(self, prompt: str, model: str = "claude-3-haiku-20240307", image_base64: Optional[str] = None) -> Optional[str]:
@@ -265,31 +279,30 @@ class MultiModelAIHelper:
             return None
         
         try:
-            print(f"[MultiModelAI] Calling Anthropic {model}")
+            print(f"[MultiModelAI] Calling Anthropic {model} (image={'yes' if image_base64 else 'no'})")
             
             if image_base64:
-                # Vision request
+                # Vision request - image FIRST, then prompt (important for Claude)
                 image_format = "jpeg"
                 if image_base64.startswith("iVBORw"):
                     image_format = "png"
-                
+
+                content = [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": f"image/{image_format}",
+                            "data": image_base64,
+                        },
+                    },
+                    {"type": "text", "text": prompt},
+                ]
+
                 message = self.anthropic_client.messages.create(
                     model=model,
                     max_tokens=2000,
-                    messages=[{
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "image",
-                                "source": {
-                                    "type": "base64",
-                                    "media_type": f"image/{image_format}",
-                                    "data": image_base64,
-                                },
-                            },
-                            {"type": "text", "text": prompt}
-                        ],
-                    }]
+                    messages=[{"role": "user", "content": content}]
                 )
             else:
                 # Text-only request
@@ -315,25 +328,41 @@ class MultiModelAIHelper:
             return None
         
         try:
-            print(f"[MultiModelAI] Calling Gemini")
+            print(f"[MultiModelAI] Calling Gemini (image={'yes' if image_path else 'no'})")
             
             if image_path:
                 # Vision request - Gemini can take image file directly
                 from PIL import Image
                 img = Image.open(image_path)
+                print(f"[MultiModelAI] Gemini processing image with prompt length: {len(prompt)}")
                 response = self.gemini_model.generate_content([prompt, img])
             else:
                 # Text-only request
                 response = self.gemini_model.generate_content(prompt)
             
+            print(f"[MultiModelAI] Gemini response object: {response}")
+            print(f"[MultiModelAI] Gemini response.text: {response.text if hasattr(response, 'text') else 'NO TEXT ATTR'}")
+            
+            # Check for content filtering or safety blocks
+            if hasattr(response, 'prompt_feedback'):
+                print(f"[MultiModelAI] Gemini prompt_feedback: {response.prompt_feedback}")
+            
             if response.text:
                 result = response.text
                 print(f"[MultiModelAI] Gemini returned {len(result)} chars")
                 return result
+            else:
+                print(f"[MultiModelAI] Gemini returned empty response (no text)")
+                # Try to get more details about why
+                if hasattr(response, 'candidates') and response.candidates:
+                    for idx, candidate in enumerate(response.candidates):
+                        print(f"[MultiModelAI] Candidate {idx}: {candidate}")
+                        if hasattr(candidate, 'finish_reason'):
+                            print(f"[MultiModelAI] Finish reason: {candidate.finish_reason}")
             return None
             
         except Exception as e:
-            print(f"[MultiModelAI] Gemini error: {e}")
+            print(f"[MultiModelAI] Gemini error: {type(e).__name__}: {e}")
             return None
 
     def _call_grok(self, prompt: str, model: str = "grok-beta") -> Optional[str]:
@@ -387,9 +416,25 @@ class MultiModelAIHelper:
                 print("[MultiModelAI] No models available")
                 return None
             print(f"[MultiModelAI] Auto-selected cheapest model: {model}")
+
+        # Ensure vision models receive base64 when an image path is provided
+        if image_path and not image_base64:
+            if ("claude" in model) or ("haiku" in model) or ("gpt" in model):
+                try:
+                    image_base64 = self._encode_image_to_base64(image_path)
+                    if image_base64:
+                        print(f"[MultiModelAI] Encoded image for vision model: {len(image_base64)} bytes")
+                except Exception as e:
+                    print(f"[MultiModelAI] Failed to encode image for model {model}: {e}")
+
+        # Hard-stop if a vision model was requested with an image but no base64 was produced
+        if image_path and ("claude" in model or "haiku" in model) and not image_base64:
+            print(f"[MultiModelAI] ERROR: image provided but failed to encode for model {model}")
+            return None
         
         # Route to appropriate API
-        if "gpt" in model or "gpt-4o-mini" in model:
+        print(f"[MultiModelAI] Processing request with model: {model}")
+        if "gpt" in model or "gpt-5-nano" in model:
             return self._call_openai(full_prompt, model, image_base64, max_retries)
         elif "claude" in model or "haiku" in model:
             return self._call_anthropic(full_prompt, model, image_base64)
@@ -421,8 +466,17 @@ class MultiModelAIHelper:
         Returns:
             Generated Python script or None if failed
         """
+        print(f"[MultiModelAI] generate_script called with model='{model}', image_path={image_path}")
+        
         if not self.is_available():
+            print("[MultiModelAI] ERROR: is_available() returned False")
             return None
+
+        # Detect platform for formula function
+        import platform
+        is_macos = platform.system() == "Darwin"
+        formula_fn = "write_in_formula_editor" if is_macos else "insert_equation"
+        formula_syntax = "'formula text'" if is_macos else "'LaTeX formula'"
 
         # Same system prompt as chatgpt_helper.py
         system_prompt = (
@@ -452,43 +506,26 @@ class MultiModelAIHelper:
             "\n5. If image contains multiple lines/paragraphs, use insert_paragraph() between them"
             "\n6. Preserve the exact mathematical structure and symbols from the image"
             "\n"
-            "\n🚫🚫🚫 CRITICAL RULE #1: FRACTIONS - NEVER USE / CHARACTER! 🚫🚫🚫"
-            "\nWhen writing ANY fraction in write_in_formula_editor(): "
-            "\n✅ CORRECT: Use 'over' → Example: 'a over b', '(x+1) over (y+2)' "
-            "\n❌ WRONG: NEVER use / → Example: 'a/b', '(x+1)/(y+2)' are FORBIDDEN! "
-            "\n❌ WRONG: NEVER use ÷ → Example: 'a÷b' is FORBIDDEN! "
-            "\n\n📖 FRACTION SYNTAX RULES: "
-            "\n1. Format: (entire_numerator) over (entire_denominator) "
-            "\n2. ALWAYS use parentheses for complex expressions "
-            "\n3. For nested fractions, each fraction uses its own 'over' "
-            "\n\n📝 FRACTION EXAMPLES: "
-            "\n- Simple: a/b → 'a over b' "
-            "\n- Complex: (a+b)/(c+d) → '{a+b} over {c+d}' "
-            "\n- With multiplication: (2*a*b)/(3*c) → '{2 times a times b} over {3 times c}' "
-            "\n"
-            "\n🎯 QUADRATIC FORMULA (근의 공식) - MOST IMPORTANT EXAMPLE:"
-            "\n   Mathematical notation: x = [-b ± √(b²-4ac)] / (2a)"
-            "\n"
-            "\n   Structure breakdown:"
-            "\n   ┌─────────────────────────────────────┐"
-            "\n   │  NUMERATOR (분자):                  │"
-            "\n   │  -b ± √(b²-4ac)  ← ENTIRE top part │"
-            "\n   ├─────────────────────────────────────┤"
-            "\n   │  'over'  ← separator                │"
-            "\n   ├─────────────────────────────────────┤"
-            "\n   │  DENOMINATOR (분모):                │"
-            "\n   │  2a  ← ENTIRE bottom part           │"
-            "\n   └─────────────────────────────────────┘"
-            "\n"
-            "\n   ✅ CORRECT: 'x = {-b +- sqrt {b^2 - 4 times a times c}} over {2 times a}'"
-            "\n   ❌ WRONG: 'x = {-b +- sqrt(b^2 - 4 times a times c)} over {2 times a}' ← Use sqrt {...} not sqrt(...)!"
-            "\n   ❌ WRONG: 'x = (-b +- sqrt(...)) over (2 times a)' ← Use {} not ()!"
-            "\n   ❌ WRONG: 'x = (-b +- sqrt(...)) / (2 times a)' ← NO / character!"
-            "\n   ❌ WRONG: 'x = -b over 2a +- sqrt(...) over 2a' ← NO! This creates TWO fractions!"
-            "\n   ❌ WRONG: Any structure with / character ← NO!"
-            "\n"
-            "\n   🔑 Use curly braces {} for ALL grouping - NEVER use parentheses ()!"
-            "\n   🔑 sqrt {...} NOT sqrt(...) - Use {} even inside sqrt!"
+            "\n🚫 CRITICAL: FRACTIONS - Use 'over' syntax!"
+            "\n⚠️⚠️⚠️ WHEN YOU SEE '-1-4' or '1-4' → THIS IS A FRACTION, NOT SUBTRACTION!"
+            "\n   The pattern 'number-number' in math context = FRACTION with horizontal bar!"
+            "\n   '-1-4' means -1 over 4 (negative one quarter)"
+            "\n   '1-4' means 1 over 4 (one quarter)"
+            "\n✅ For fractions: '{numerator} over {denominator}' - PLAIN TEXT!"
+            "\n🔴🔴🔴 CRITICAL - NEVER USE BACKTICKS! 🔴🔴🔴"
+            "\n   ❌ WRONG: '{1`over`4}' - NO BACKTICKS!"
+            "\n   ❌ WRONG: '{1 `over` 4}' - NO BACKTICKS!"
+            "\n   ❌ WRONG: '1over4' - NO SPACES!"
+            "\n   ✅ CORRECT: '{1 over 4}' - plain text, spaces, NO backticks"
+            "\n   ✅ CORRECT: '{-1 over 4}' - plain text, spaces, NO backticks"
+            "\n   ✅ CORRECT: '{3 over 2}' - plain text, spaces, NO backticks"
+            "\nWrite the word 'over' as a normal English word with SPACES before and after!"
+            "\n✅ CORRECT: f'({{-1} over 4})"
+            "\n❌ NEVER use / character: 'a/b' is WRONG!"
+            "\n❌ NEVER use minus sign: '1-4' is WRONG when you see a fraction!"
+            "\n❌ NEVER write: f'(-1-4) or f'(1-4) - these patterns mean fractions!"
+            "\n✅ For square root: 'sqrt {expression}' with curly braces"
+            "\n❌ NEVER use parentheses: 'sqrt(...)' is WRONG!"
             "\n"
             "\n⚠️⚠️⚠️ CRITICAL RULE #2: ALWAYS USE FORMULA EDITOR FOR MATH! "
             "If user asks for ANYTHING related to: "
@@ -507,8 +544,9 @@ class MultiModelAIHelper:
             "✅ AVAILABLE FUNCTIONS (사용 가능한 함수):"
             "\n- insert_text(text: str): Insert plain text (일반 텍스트 삽입, 수식 아님!) "
             "\n- insert_paragraph(): Insert a paragraph break (문단 나누기) "
-            "\n- write_in_formula_editor(text: str, close_window: bool = True): [macOS ONLY] 수식 삽입 - 모든 수학 공식은 이것 사용! "
-            "\n- insert_equation(latex: str, font_size_pt: float = 14.0): Insert complex LaTeX "
+            "\n- write_in_formula_editor(text: str, close_window: bool = True): [macOS ONLY] 수식 삽입 - 모든 수학 공식은 이것 사용! "            "\n  🚨 CRITICAL: ALWAYS use close_window=True to exit the formula editor!"
+            "\n  ❌ WRONG: write_in_formula_editor('1 over 4')"
+            "\n  ✅ CORRECT: write_in_formula_editor('1 over 4', close_window=True)"            "\n- insert_equation(latex: str, font_size_pt: float = 14.0): Insert complex LaTeX "
             "\n- insert_hwpeqn(hwpeqn: str, font_size_pt: float = 12.0): Insert HWP equation format "
             "\n- insert_table(rows: int, cols: int, cell_data: list = None): Insert a table "
             "\n"
@@ -524,6 +562,7 @@ class MultiModelAIHelper:
             "[DESCRIPTION]\n"
             "Write a natural, friendly response in Korean (1-2 sentences) confirming what you did for the user. "
             "DO NOT explain the code or technical details. "
+            "DO NOT list the lines you extracted (no '📋 Line 1:', '📋 Line 2:', etc.). "
             "Speak like a helpful assistant confirming the task (e.g., '네, 요청하신 대로 이차방정식 수식을 작성했습니다. 더 필요한 게 있으시면 말씀해주세요!'). "
             "Be conversational and end with an offer to help more.\n"
             "[/DESCRIPTION]\n\n"
@@ -534,22 +573,116 @@ class MultiModelAIHelper:
         user_message_parts = [f"User request: {description}"]
         
         if image_path:
+            from pathlib import Path
+            filename = Path(image_path).name
             user_message_parts.append(
                 f"\n\n"
-                f"\n🚨🚨🚨 STOP! READ THIS BEFORE GENERATING CODE! 🚨🚨🚨"
+                f"📸 IMAGE PROVIDED: {filename}\n"
+                f"\n🚨🚨🚨 YOU ARE OCR SOFTWARE - Extract EVERY SINGLE WORD from the image!\n"
+                f"\n⛔ RULE #1: TEXT FIRST, FORMULAS SECOND!\n"
+                f"\n⛔ RULE #2: DO NOT SKIP KOREAN TEXT!\n"
+                f"\n⛔ RULE #3: DO NOT SKIP QUESTION NUMBERS!\n"
+                f"\n⛔ RULE #4: DO NOT SKIP MULTIPLE CHOICE OPTIONS!\n"
                 f"\n"
-                f"\n❌❌❌ DO NOT WRITE: insert_image()"
-                f"\n❌❌❌ DO NOT WRITE: insert_image('{image_path}')"
-                f"\n❌❌❌ insert_image() DOES NOT EXIST! IT WILL CRASH!"
+                f"\n� 🔴 🔴 CRITICAL - READ IMAGE FROM TOP TO BOTTOM 🔴 🔴 🔴"
                 f"\n"
-                f"\n✅✅✅ YOUR JOB: READ THE IMAGE AND EXTRACT CONTENT"
+                f"\nSTEP 1: Look at the TOP of the image FIRST - there is often text ABOVE the formula!"
+                f"\nSTEP 2: Extract EVERY line of text you see from top to bottom"
+                f"\nSTEP 3: Do NOT skip any text or lines"
+                f"\nSTEP 4: Extract ALL content before the formula appears"
                 f"\n"
-                f"\n📋 WHAT YOU SEE IN THE IMAGE:"
-                f"\n  - Text? → Use insert_text('text here')"
-                f"\n  - Formula? → Use write_in_formula_editor('formula', close_window=True)"
-                f"\n  - New line? → Use insert_paragraph()"
-                f"\n  - The image file itself? → DO NOTHING! Don't insert it!"
+                f"\n� INLINE MATH RULE: Extract math variables/expressions as formulas!"
+                f"\nWhen you see text with math like 't=0', 't≥0', 'x', 'P', or numbers like '11':"
+                f"\n❌ WRONG: insert_text('11. 시각 t=0일 때')"
+                f"\n✅ CORRECT: write_in_formula_editor('11', close_window=True) + insert_text('. 시각 ') + write_in_formula_editor('t=0', close_window=True) + insert_text('일 때')"
+                f"\nSplit text and formulas - extract ALL numbers and variables as formulas!"
                 f"\n"
+                f"\n📝 MANDATORY EXTRACTION ORDER:\n"
+                f"\n1. Read TOP of image and extract first line → Split text and inline math!"
+                f"\n2. Extract second line → Split text and inline math!"
+                f"\n3. Keep extracting ALL text lines BEFORE formula"
+                f"\n4. Now extract formula → {formula_fn}(...)"
+                f"\n5. Extract ALL text AFTER formula"
+                f"\n6. Extract multiple choice options → ⚠️ CRITICAL: ALL OPTIONS ON ONE LINE WITH SPACES"
+                f"\n   insert_text('① 6    ② 9    ③ 12    ④ 15    ⑵ 18')"
+                f"\n   ❌ WRONG: Each option on separate lines"
+                f"\n   ✅ CORRECT: All on ONE line with spacing between options"
+                f"\n"
+                f"\n🎯 COMPLETE REAL EXAMPLE:"
+                f"\n"
+                f"\n🚨 CRITICAL: Extract ALL numbers and inline math as formulas!"
+                f"\nwrite_in_formula_editor('11', close_window=True)"
+                f"\ninsert_text('. 시각 ')"
+                f"\nwrite_in_formula_editor('t=0', close_window=True)"
+                f"\ninsert_text('일 때 출발하여 수직선 위를 움직이는 점 ')"
+                f"\nwrite_in_formula_editor('P', close_window=True)"
+                f"\ninsert_text('의')"
+                f"\ninsert_paragraph()"
+                f"\ninsert_text('시각 ')"
+                f"\nwrite_in_formula_editor('t', close_window=True)"
+                f"\ninsert_text('(')"
+                f"\nwrite_in_formula_editor('t>=0', close_window=True)"
+                f"\ninsert_text(')에서의 위치 ')"
+                f"\nwrite_in_formula_editor('x', close_window=True)"
+                f"\ninsert_text('가')"
+                f"\ninsert_paragraph()"
+                + (
+                    f"\nwrite_in_formula_editor('x = {{t^3}} - {{3 over 2}}{{t^2}} - 6t', close_window=True)"
+                    if is_macos
+                    else f"\ninsert_equation('x = t^{{3}} - \\\\frac{{3}}{{2}}t^{{2}} - 6t')"
+                )
+                + f"\ninsert_paragraph()"
+                + f"\ninsert_text('이다. 출발한 후 점 P의 운동 방향이 바뀌는 시각에서의')"
+                + f"\ninsert_paragraph()"
+                + f"\ninsert_text('점 P의 가속도는? [4점]')"
+                + f"\ninsert_paragraph()"
+                + f"\ninsert_text('① 6    ② 9    ③ 12    ④ 15    ⑤ 18')"
+                + f"\ninsert_paragraph()"
+                + f"\n"
+                + f"\n❌ WRONG (only formula, no text):"
+                + f"\nwrite_in_formula_editor(...)"
+                + f"\n"
+                + f"\n✅ CORRECT (text + formula + text):"
+                + f"\ninsert_text('Korean text before')"
+                + f"\ninsert_paragraph()"
+                + f"\nwrite_in_formula_editor(...)"
+                + f"\ninsert_paragraph()"
+                + f"\ninsert_text('Korean text after')"
+                + f"\n"
+                + f"\n🔥 FORMULA SYNTAX ({formula_fn}) - CRITICAL RULES:\n"
+                + (
+                    f"\n  📌 RULE: ALWAYS wrap powers/superscripts in braces: {{base^power}}"
+                    f"\n  📌 RULE: Use 'times' for multiplication, not just number+variable"
+                    f"\n  📌 RULE: Separate terms with spaces and operators OUTSIDE braces"
+                    f"\n"
+                    f"\n  ✅ CORRECT EXAMPLE 1: x = {{t^3}} - 3 - 2{{t^2}} - 6t"
+                    f"\n     → This renders as: x = t³ - 3 - 2t² - 6t"
+                    f"\n"
+                    f"\n  ✅ CORRECT EXAMPLE 2: {{t^3}} - {{3 over 2}}{{t^2}} - 6 times t"
+                    f"\n     → This renders as: t³ - (3/2)t² - 6t"
+                    f"\n"
+                    f"\n  ❌ WRONG: t^3 - 3 - 2t^2 - 6t"
+                    f"\n     → HWP renders as: t^(3-3-2t²-6t) (everything becomes superscript!)"
+                    f"\n"
+                    f"\n  ❌ WRONG: {{t^3 - 3 - 2t^2 - 6t}}"
+                    f"\n     → This makes the whole expression a single superscript"
+                    f"\n"
+                    f"\n  🎯 TEMPLATE for any formula with powers:"
+                    f"\n     Variable with power: {{variable^number}}"
+                    f"\n     Fraction: {{numerator over denominator}}"
+                    f"\n     Multiplication: number times variable"
+                    f"\n     Then connect with +, -, etc. OUTSIDE the braces"
+                    f"\n"
+                    f"\n  Full example code:"
+                    f"\n  write_in_formula_editor('x = {{t^3}} - 3 - 2{{t^2}} - 6t', close_window=True)"
+                    if is_macos
+                    else f"\n  ✅ Windows: insert_equation('x = t^{{3}} - 3 - 2t^{{2}} - 6t')"
+                )
+                + f"\n"
+                + f"\n❌ NEVER SKIP TEXT - Extract Korean/English/numbers AS TEXT!"
+                + f"\n❌ NEVER extract only formulas - extract COMPLETE content!"
+                + f"\n✅ Read image top to bottom and extract EVERYTHING you see!"
+                + f"\n"
             )
         
         if context:
@@ -581,9 +714,76 @@ class MultiModelAIHelper:
                         on_thought("❌ 이미지 처리 실패")
                     print("[MultiModelAI] ERROR: Failed to encode image")
                     return None
-            
-            # Combine system prompt and user message
-            full_prompt = f"{system_prompt}\n\n{user_message}"
+                
+                # Add explicit instruction for image analysis
+                image_instruction = (
+                    "\n\n� 🔴 🔴 READ THE ENTIRE IMAGE TOP TO BOTTOM - DO NOT SKIP ANYTHING 🔴 🔴 🔴"
+                    "\n"
+                    "\n⚠️⚠️⚠️ CRITICAL: Images usually have MULTIPLE LINES. You must read ALL of them."
+                    "\n"
+                    "\nBEFORE WRITING ANY CODE, you MUST list what you see:"
+                    "\n- Line 1: [Look at very TOP of image - what text is there?]"
+                    "\n- Line 2: [What comes next?]"
+                    "\n- Line 3: [Continue down]"
+                    "\n"
+                    "\n🚨 SPECIAL WARNING FOR KOREAN TEXT 🚨"
+                    "\nIf you see Korean text like '11. 시각 t=0일 때...' at the top, that is LINE 1!"
+                    "\nDo NOT skip it. Extract it with insert_text()."
+                    "\n"
+                    "\n� FRACTION RECOGNITION 🚨"
+                    "\n⚠️⚠️⚠️ MOST CRITICAL: When you see expressions like '-1-4' or '1-4' in math context:"
+                    "\nTHIS IS A FRACTION, NOT SUBTRACTION!"
+                    "\nThe middle dash is a FRACTION BAR, not a minus sign!"
+                    "\n"
+                    "\n🚫🚫🚫 ABSOLUTELY NO BACKTICKS AROUND 'over'! 🚫🚫🚫"
+                    "\n❌ WRONG: '{1`over`4}' - BACKTICKS NOT ALLOWED!"
+                    "\n❌ WRONG: '{1 `over` 4}' - BACKTICKS NOT ALLOWED!"
+                    "\n❌ WRONG: write_in_formula_editor('-1-4')"
+                    "\n✅ CORRECT: '{1 over 4}' - plain text only"
+                    "\n✅ CORRECT: '{-1 over 4}' - plain text only"
+                    "\n✅ CORRECT: f prime ({{{{-1} over 4}})"
+                    "\n"
+                    "\nThe word 'over' MUST be plain English text with spaces:"
+                    "\n  {{1 over 4}}    ← YES, write like this"
+                    "\n  {{-1 over 4}}   ← YES, write like this"
+                    "\n  {{3 over 2}}    ← YES, write like this"
+                    "\n  {{1`over`4}}    ← NO! Backticks forbidden!"
+                    "\n  {{1`over`4}}    ← NO! Backticks forbidden!"
+                    "\n"
+                    "\nWhen you see numbers arranged VERTICALLY or with a horizontal bar:"
+                    "\n  -1"
+                    "\n  ——  → This is {{-1} over 4}"
+                    "\n   4"
+                    "\n"
+                    "\nCommon fraction patterns to recognize:"
+                    "\n• '-1-4' → '{{-1} over 4}'"
+                    "\n• '1-4' → '{{1} over 4}'"
+                    "\n• '3-2' → '{{3} over 2}'"
+                    "\n• Any 'number-number' in parentheses → fraction!"
+                    "\n"
+                    "\n�👁️ STEP-BY-STEP:"
+                    "\n1. Look at the TOP-LEFT of the image"
+                    "\n2. Read the FIRST word/character you see"
+                    "\n3. Continue reading RIGHT and DOWN"
+                    "\n4. When you reach the end of a line, go to the NEXT line"
+                    "\n5. Extract EVERY line as insert_text()"
+                    "\n6. Keep going until you see a formula"
+                    "\n7. Then extract the formula"
+                    "\n8. Then continue with any text AFTER the formula"
+                    "\n9. If multiple choice exists, combine ALL on ONE line like: insert_text('① 16    ② 29    ③ 12    ④ 15    ⑤ 18')"
+                    "\n"
+                    "\n✅ DO NOT FORGET THE FIRST LINE! It's the most important!"
+                    "\n✅ DO NOT SKIP ANY LINES!"
+                    "\n✅ READ FROM TOP TO BOTTOM!"
+                    "\n✅ MULTIPLE CHOICE: ALL OPTIONS ON ONE LINE WITH SPACING!"                    "\n"
+                    "\n🚨 CRITICAL: ALWAYS include close_window=True! 🚨"
+                    "\nEvery write_in_formula_editor() call MUST have close_window=True"
+                    "\n❌ WRONG: write_in_formula_editor('1 over 4')"
+                    "\n✅ CORRECT: write_in_formula_editor('1 over 4', close_window=True)"                )
+                full_prompt = f"{system_prompt}{image_instruction}\n\n{user_message}"
+            else:
+                full_prompt = f"{system_prompt}\n\n{user_message}"
+            print(f"[MultiModelAI] Calling API with model={model}...")
             generated = self._call_api_with_retry(
                 full_prompt, 
                 model=model,
@@ -594,7 +794,7 @@ class MultiModelAIHelper:
             if not generated:
                 if on_thought:
                     on_thought(f"❌ 오류 발생: API 응답 없음")
-                print("[MultiModelAI] ERROR: No response from API")
+                print(f"[MultiModelAI] ERROR: API returned None for model={model}")
                 return None
             
             # Filter out insert_image() calls if AI generated them

@@ -201,7 +201,7 @@ class ChatGPTHelper:
                             return None
                     except AttributeError:
                         print("[ChatGPT] Falling back to chat.completions.create")
-                        response = self.client.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "user", "content": full_prompt}], max_tokens=2000)
+                        response = self.client.chat.completions.create(model="gpt-5-nano", messages=[{"role": "user", "content": full_prompt}], max_tokens=2000)
                         if response.choices and len(response.choices) > 0:
                             result = response.choices[0].message.content
                             if result:
