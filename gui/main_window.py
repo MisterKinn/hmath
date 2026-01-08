@@ -261,10 +261,6 @@ def _create_styled_dialog(parent, title: str, content: str, min_width: int = 500
     return msg
 
 DEFAULT_SCRIPT = """
-# 예시: 텍스트 + 수식을 한 번에 삽입
-insert_text("AMEX AI가 자동으로 한글 문단을 입력합니다.\\r")
-insert_text("Einstein 질량-에너지 등가식은 아래와 같습니다.\\r")
-insert_hwpeqn("E = m c ^{2}", font_size_pt=12.0, eq_font_name="HYhwpEQ")
 """
 
 # Template library
@@ -338,6 +334,80 @@ class ScriptWorker(QThread):
 
 
 class MainWindow(QMainWindow):
+    def _export_chats(self) -> None:
+        """Export all chats to a JSON file with enhanced dialog design."""
+        from PySide6.QtWidgets import QFileDialog, QDialog, QVBoxLayout, QLabel, QPushButton
+        import json
+        file_path, _ = QFileDialog.getSaveFileName(self, "채팅 내보내기", "", "JSON Files (*.json);;All Files (*)")
+        if file_path:
+            try:
+                with open(file_path, "w", encoding="utf-8") as f:
+                    json.dump(self._chats, f, ensure_ascii=False, indent=2)
+                # Custom dialog
+                dlg = QDialog(self)
+                dlg.setWindowTitle("내보내기 완료")
+                dlg.setMinimumWidth(340)
+                layout = QVBoxLayout(dlg)
+                layout.setContentsMargins(32, 32, 32, 32)
+                layout.setSpacing(24)
+                title = QLabel("채팅을 성공적으로 저장했습니다.")
+                title_color = "#fff" if self.dark_mode else "#222"
+                title.setStyleSheet(f"font-size: 22px; font-weight: 900; color: {title_color}; letter-spacing: 0.5px; text-shadow: 0 2px 8px #e0e0e0;")
+                title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                layout.addWidget(title)
+                path_label = QLabel(file_path)
+                path_label.setStyleSheet("font-size: 16px; color: #444; font-weight: 600; margin-bottom: 12px;")
+                path_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                layout.addWidget(path_label)
+                ok_btn = QPushButton("OK")
+                ok_btn.setStyleSheet("background-color: #5377f6; color: white; border: none; border-radius: 8px; padding: 12px 36px; font-size: 17px; font-weight: 700; min-width: 80px; max-width: 120px;")
+                ok_btn.setFixedWidth(100)
+                ok_btn.clicked.connect(dlg.accept)
+                layout.addWidget(ok_btn, alignment=Qt.AlignmentFlag.AlignCenter)
+                dlg.exec()
+            except Exception as e:
+                from PySide6.QtWidgets import QMessageBox
+                QMessageBox.critical(self, "내보내기 오류", f"채팅 내보내기에 실패했습니다.\n{e}")
+
+    def _import_chats(self) -> None:
+        """Import chats from a JSON file with enhanced dialog design."""
+        from PySide6.QtWidgets import QFileDialog, QDialog, QVBoxLayout, QLabel, QPushButton, QMessageBox
+        import json
+        file_path, _ = QFileDialog.getOpenFileName(self, "채팅 가져오기", "", "JSON Files (*.json);;All Files (*)")
+        if file_path:
+            try:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    chats = json.load(f)
+                if isinstance(chats, list):
+                    self._chats = chats
+                    self._current_chat_id = None
+                    self._render_chat_list()
+                    # Custom dialog
+                    dlg = QDialog(self)
+                    dlg.setWindowTitle("가져오기 완료")
+                    dlg.setMinimumWidth(340)
+                    layout = QVBoxLayout(dlg)
+                    layout.setContentsMargins(32, 32, 32, 32)
+                    layout.setSpacing(24)
+                    title = QLabel("채팅을 성공적으로 불러왔습니다.")
+                    title_color = "#fff" if self.dark_mode else "#222"
+                    title.setStyleSheet(f"font-size: 22px; font-weight: 900; color: {title_color}; letter-spacing: 0.5px; text-shadow: 0 2px 8px #e0e0e0;")
+                    title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                    layout.addWidget(title)
+                    path_label = QLabel(file_path)
+                    path_label.setStyleSheet("font-size: 16px; color: #444; font-weight: 600; margin-bottom: 12px;")
+                    path_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                    layout.addWidget(path_label)
+                    ok_btn = QPushButton("OK")
+                    ok_btn.setStyleSheet("background-color: #5377f6; color: white; border: none; border-radius: 8px; padding: 12px 36px; font-size: 17px; font-weight: 700; min-width: 80px; max-width: 120px;")
+                    ok_btn.setFixedWidth(100)
+                    ok_btn.clicked.connect(dlg.accept)
+                    layout.addWidget(ok_btn, alignment=Qt.AlignmentFlag.AlignCenter)
+                    dlg.exec()
+                else:
+                    QMessageBox.warning(self, "가져오기 오류", "올바른 채팅 데이터가 아닙니다.")
+            except Exception as e:
+                QMessageBox.critical(self, "가져오기 오류", f"채팅 가져오기에 실패했습니다.\n{e}")
     def _show_welcome_message(self):
         self._clear_chat_transcript()
         row = QWidget()
@@ -551,10 +621,12 @@ class MainWindow(QMainWindow):
         try:
             # Always save the current chat's state (including messages) before persisting
             self._save_current_chat_state()
-            storage = Path.home() / ".formulite_chats.json"
-            import json
+            import json, os
+            folder = Path.home() / "formulite_chats"
+            folder.mkdir(parents=True, exist_ok=True)
+            file_path = folder / "chat_history.json"
             data = {"chats": self._chats, "current": self._current_chat_id, "model": getattr(self, '_current_model', None)}
-            storage.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            file_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception as e:
             print(f"[Persist] Failed to write chats: {e}")
 
@@ -566,7 +638,7 @@ class MainWindow(QMainWindow):
         best-effort and tolerant of malformed files.
         """
         try:
-            storage = Path.home() / ".formulite_chats.json"
+            storage = Path.home() / "formulite_chats" / "chat_history.json"
             print(f"[Persist] Checking for storage file: {storage}")
             if not storage.exists():
                 print("[Persist] No storage file found, starting fresh")
@@ -3894,7 +3966,11 @@ class MainWindow(QMainWindow):
             pass
 
         layout = QVBoxLayout(popup)
-        layout.setContentsMargins(12, 12, 12, 12)
+        # Add extra left and top padding in dark mode for better spacing
+        if self.dark_mode:
+            layout.setContentsMargins(16, 16, 12, 12)
+        else:
+            layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(10)
 
         # Top: avatar + name + handle
@@ -3996,7 +4072,12 @@ class MainWindow(QMainWindow):
             ic = QLabel()
             # slightly smaller icon container for tighter layout
             ic.setFixedSize(32, 32)
-            ic.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            # Align icons vertically center for better alignment
+            ic.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
+            try:
+                ic.setStyleSheet('background: transparent; margin-left: 8px; margin-top: 2px;')
+            except Exception:
+                pass
 
             # Helper to load local assets with fallback to theme icons, and optionally tint
             def _load_icon_for(key: str, sz: int = 18, tint_black: bool = False):
@@ -4066,22 +4147,22 @@ class MainWindow(QMainWindow):
                     assets_dir = Path(__file__).resolve().parents[1] / "public" / "img"
                     cand = assets_dir / ("upgrade-dark.png" if self.dark_mode else "upgrade.png")
                     if cand.exists():
-                        icon_pix = QPixmap(str(cand)).scaled(24, 24, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                        icon_pix = QPixmap(str(cand)).scaled(20, 20, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
                     else:
-                        icon_pix = _load_icon_for(icon_key, sz=24, tint_black=False)
+                        icon_pix = _load_icon_for(icon_key, sz=20, tint_black=False)
                 except Exception:
-                    icon_pix = _load_icon_for(icon_key, sz=24, tint_black=False)
+                    icon_pix = _load_icon_for(icon_key, sz=20, tint_black=False)
             elif icon_key == 'profile':
                 # Prefer theme-specific profile asset when available
                 try:
                     assets_dir = Path(__file__).resolve().parents[1] / "public" / "img"
                     cand = assets_dir / ("profile-dark.png" if self.dark_mode else "profile.png")
                     if cand.exists():
-                        icon_pix = QPixmap(str(cand)).scaled(24, 24, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                        icon_pix = QPixmap(str(cand)).scaled(20, 20, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
                     else:
-                        icon_pix = _load_icon_for(icon_key, sz=24, tint_black=False)
+                        icon_pix = _load_icon_for(icon_key, sz=20, tint_black=False)
                 except Exception:
-                    icon_pix = _load_icon_for(icon_key, sz=24, tint_black=False)
+                    icon_pix = _load_icon_for(icon_key, sz=20, tint_black=False)
             elif icon_key == 'light':
                 # Prefer explicit 'moon-light.svg' in light mode (show moon to switch to dark),
                 # and 'light-dark.svg' in dark mode (show sun to switch to light)
@@ -4092,11 +4173,24 @@ class MainWindow(QMainWindow):
                     else:
                         cand = assets_dir / "light-dark.svg"
                     if cand.exists():
-                        icon_pix = QPixmap(str(cand)).scaled(28, 28, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                        icon_pix = QPixmap(str(cand)).scaled(22, 22, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
                     else:
-                        icon_pix = _load_icon_for(icon_key, sz=28, tint_black=False)
+                        icon_pix = _load_icon_for(icon_key, sz=22, tint_black=False)
                 except Exception:
-                    icon_pix = _load_icon_for(icon_key, sz=28, tint_black=False)
+                    icon_pix = _load_icon_for(icon_key, sz=22, tint_black=False)
+            elif icon_key == 'edit':
+                # Use explicit dark-mode asset for the 코드 입력 item
+                try:
+                    assets_dir = Path(__file__).resolve().parents[1] / "public" / "img"
+                    if self.dark_mode:
+                        cand = assets_dir / "edit-dark.png"
+                        if cand.exists():
+                            icon_pix = QPixmap(str(cand)).scaled(20, 20, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                    if icon_pix is None:
+                        icon_pix = _load_icon_for(icon_key, sz=20, tint_black=False)
+                except Exception:
+                    icon_pix = _load_icon_for(icon_key, sz=20, tint_black=False)
+                # Global margins already applied above; no per-item override needed
             elif icon_key == 'settings':
                 # Prefer explicit theme-specific settings asset: settings-dark.svg in dark mode, settings-light.png otherwise.
                 try:
@@ -4113,7 +4207,7 @@ class MainWindow(QMainWindow):
                                 s_pix = QPixmap(str(cand2)).scaled(20, 20, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
                                 icon_pix = s_pix
                             else:
-                                icon_pix = _load_icon_for(icon_key, sz=18, tint_black=True)
+                                icon_pix = _load_icon_for(icon_key, sz=20, tint_black=True)
                     else:
                         cand = assets_dir / "settings-light.png"
                         if cand.exists():
@@ -4125,7 +4219,7 @@ class MainWindow(QMainWindow):
                                 s_pix = QPixmap(str(cand2)).scaled(20, 20, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
                                 icon_pix = s_pix
                             else:
-                                icon_pix = _load_icon_for(icon_key, sz=18, tint_black=True)
+                                icon_pix = _load_icon_for(icon_key, sz=20, tint_black=True)
                 except Exception:
                     icon_pix = _load_icon_for(icon_key, sz=18, tint_black=True)
                 # In dark mode, ensure this icon is white for visibility
@@ -4150,11 +4244,11 @@ class MainWindow(QMainWindow):
                     assets_dir = Path(__file__).resolve().parents[1] / "public" / "img"
                     cand = assets_dir / ("logout-dark.png" if self.dark_mode else "logout.png")
                     if cand.exists():
-                        icon_pix = QPixmap(str(cand)).scaled(24, 24, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                        icon_pix = QPixmap(str(cand)).scaled(22, 22, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
                     else:
-                        icon_pix = _load_icon_for(icon_key, sz=24, tint_black=False)
+                        icon_pix = _load_icon_for(icon_key, sz=22, tint_black=False)
                 except Exception:
-                    icon_pix = _load_icon_for(icon_key, sz=24, tint_black=False)
+                    icon_pix = _load_icon_for(icon_key, sz=22, tint_black=False)
             else:
                 icon_pix = _load_icon_for(icon_key, sz=18, tint_black=False)
 
@@ -4184,8 +4278,8 @@ class MainWindow(QMainWindow):
                         fallback_name = f"{icon_key}-icon.png"
                         fb = assets_dir / fallback_name
                         if fb.exists():
-                            # Use a larger scaled size for logout, otherwise default to 18
-                            sz = 24 if icon_key == 'logout' else 18
+                            # Use 22px for 'light' and 'logout' icons, else 20px
+                            sz = 22 if icon_key in ('light', 'logout') else 20
                             fb_pix = QPixmap(str(fb)).scaled(sz, sz, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
                             # Tint fallback to white in dark mode as well
                             try:
@@ -4205,9 +4299,9 @@ class MainWindow(QMainWindow):
                                 pass
                             ic.setPixmap(fb_pix)
                         else:
-                            ic.setStyleSheet('background: transparent;')
+                            ic.setStyleSheet('background: transparent; margin-left: 8px; margin-top: 2px;')
                     except Exception:
-                        ic.setStyleSheet('background: transparent;')
+                        ic.setStyleSheet('background: transparent; margin-left: 8px; margin-top: 2px;')
             except Exception:
                 pass
 
@@ -4265,6 +4359,7 @@ class MainWindow(QMainWindow):
         # Show action text based on current theme: suggest switching to the opposite mode
         theme_row_label = '라이트 모드' if self.dark_mode else '다크 모드'
         add_row('light', theme_row_label, handler=None, checkable=True, checked=self.dark_mode)
+        # Removed save/load chat from profile menu
         add_row('settings', '설정', self._show_settings)
 
         # spacer + logout (use add_row so logout has an icon)
@@ -4273,8 +4368,10 @@ class MainWindow(QMainWindow):
 
         # Position the popup under the profile button
         anchor = btn.mapTo(self.drawer_panel, btn.rect().bottomLeft())
+        # Set fixed width to ensure consistent size in both light and dark mode
+        popup.setFixedWidth(220)
         popup.adjustSize()
-        pw = popup.width() or 220
+        pw = 220
         ph = popup.height()
         x = max(8, anchor.x())
         # Prefer placing popup above the bottom edge so it doesn't overflow
@@ -5180,7 +5277,7 @@ class MainWindow(QMainWindow):
         settings_icon = self._get_icon_path_str("settings") or ""
         settings_content = f"""
     <div style='margin-bottom: 20px;'>
-        <h2 style='font-size: 20px; margin: 0; padding: 0;'>⚙️ 설정</h2>
+        <h2 style='font-size: 20px; margin: 0; padding: 0;'>설정</h2>
     </div>
 
     <div class="setting-section">
@@ -5201,20 +5298,42 @@ class MainWindow(QMainWindow):
         <span class="setting-value">Windows, macOS, Linux<br></span>
     </div>
 </div>
-
-<div class="info-box">
-    <strong>참고:</strong>한글 자동화는 Windows 환경에서만 작동합니다. macOS/Linux에서는 스크립트 편집 기능만 사용 가능합니다.
-</div>
 """
-        msg = _create_styled_dialog(
-            self,
-            "⚙️ 설정",
-            settings_content,
-            550,
-            dark_mode=self.dark_mode,
-            icon_path=None,
-        )
-        msg.exec()
+        from PySide6.QtWidgets import QDialog, QVBoxLayout, QPushButton, QLabel
+        dlg = QDialog(self)
+        dlg.setWindowTitle("설정")
+        dlg.setMinimumWidth(420)
+        from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QWidget
+        dlg = QDialog(self)
+        dlg.setWindowTitle("설정")
+        dlg.setMinimumWidth(420)
+        layout = QVBoxLayout(dlg)
+        layout.setContentsMargins(32, 32, 32, 32)
+        layout.setSpacing(18)
+        info_label = QLabel()
+        info_label.setText(settings_content)
+        info_label.setTextFormat(Qt.TextFormat.RichText)
+        layout.addWidget(info_label)
+        # Save/load chat buttons in a horizontal layout on the right
+        btn_row = QWidget()
+        btn_layout = QHBoxLayout(btn_row)
+        btn_layout.setContentsMargins(0, 0, 0, 0)
+        btn_layout.setSpacing(12)
+        btn_layout.addStretch(1)
+        save_btn = QPushButton('채팅 저장하기')
+        save_btn.setIcon(QIcon(str(self._get_icon_path('save-light' if not self.dark_mode else 'save-dark'))))
+        save_btn.setIconSize(QSize(32, 32))
+        save_btn.setStyleSheet("font-size:16px; font-weight:700; padding:4px 18px; border-radius:8px; border: 2px solid #222; min-height:28px;")
+        save_btn.clicked.connect(self._export_chats)
+        btn_layout.addWidget(save_btn)
+        load_btn = QPushButton('채팅 불러오기')
+        load_btn.setIcon(QIcon(str(self._get_icon_path('load-light' if not self.dark_mode else 'load-dark'))))
+        load_btn.setIconSize(QSize(32, 32))
+        load_btn.setStyleSheet("font-size:16px; font-weight:700; padding:4px 18px; border-radius:8px; border: 2px solid #222; min-height:28px;")
+        load_btn.clicked.connect(self._import_chats)
+        btn_layout.addWidget(load_btn)
+        layout.addWidget(btn_row)
+        dlg.exec()
 
     def _voice_to_text(self) -> Optional[str]:
         """Convert voice input to text using speech recognition."""
@@ -6893,6 +7012,19 @@ class MainWindow(QMainWindow):
             )
             # Activate the new chat so UI updates consistently and the drawer closes via _activate_chat
             self._activate_chat(new_id)
+            # Show big black '무엇이든 물어보세요' in the chat area (not as a chat message)
+            self._clear_chat_transcript()
+            self.chat_transcript_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+            row = QWidget()
+            row_lyt = QHBoxLayout(row)
+            row_lyt.setContentsMargins(0, 0, 0, 0)
+            row_lyt.setSpacing(0)
+            label = QLabel("무엇이든 물어보세요")
+            label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+            label.setStyleSheet("font-size: 36px; color: #000; font-weight: 800; margin: 0 0 0 12px;")
+            row_lyt.addWidget(label, 0, Qt.AlignmentFlag.AlignTop)
+            row.setLayout(row_lyt)
+            self.chat_transcript_layout.addWidget(row, 0, Qt.AlignmentFlag.AlignTop)
             # Ensure editor is focused and set to default script
             try:
                 if hasattr(self, "script_edit"):
