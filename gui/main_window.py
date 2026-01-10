@@ -2666,6 +2666,10 @@ class MainWindow(QMainWindow):
     def _apply_styles(self) -> None:
         theme = "light" if not self.dark_mode else "dark"
         theme_qss = _load_theme(theme)
+        # Always apply the QSS to the QApplication instance as well
+        app = QApplication.instance()
+        if app is not None:
+            app.setStyleSheet(theme_qss)
         # Adaptive overrides depending on theme
         if not self.dark_mode:
             override = "\nQWidget#main-area { background-color: #ffffff; color: #000000; }\nQWidget#central { background-color: #ffffff; color: #000000; }\nQMainWindow { background-color: #ffffff; color: #000000; }\n"
@@ -2749,8 +2753,7 @@ class MainWindow(QMainWindow):
             # HWP file text (no longer styled as pill)
             if hasattr(self, "hwp_filename_label"):
                 try:
-                    text_color = "#000000" if not self.dark_mode else "#ffffff"
-                    self.hwp_filename_label.setStyleSheet(f"font-size: 16px; font-weight: 600; color: {text_color}; background: transparent; padding: 4px 8px;")
+                    self.hwp_filename_label.setStyleSheet("")  # Use QSS from theme only
                 except Exception:
                     pass
 

@@ -1,3 +1,8 @@
+#hwp-filename-text {
+    color: white;
+    font-size: 16px;
+    font-weight: 600;
+}
 QWidget {
     background-color: #000000;
     color: #e8e8e8;

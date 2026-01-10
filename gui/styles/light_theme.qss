@@ -1,3 +1,11 @@
+#hwp-filename-text {
+    background: transparent;
+    padding: 4px 8px;
+    color: black;
+    font-size: 16px;
+    font-weight: 600;
+}
+
 /* Aggressively remove all borders, outlines, and shadows from QMenu and its items */
 QMenu, QMenu::item, QMenu::indicator {
     border: none !important;
