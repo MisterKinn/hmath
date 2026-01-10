@@ -64,6 +64,26 @@ class HwpConnectionOptions:
 
 
 class HwpController:
+
+    def get_current_filename(self) -> str:
+        """
+        Returns the file name of the currently open HWP document (Windows only).
+        Uses win32com.client to get the full path and extract the file name.
+        Returns empty string if not on Windows or on error.
+        """
+        if not IS_WINDOWS:
+            return ""
+        try:
+            import win32com.client  # type: ignore
+            hwp = win32com.client.Dispatch("HWPFrame.HwpObject")
+            full_path = hwp.Path
+            if not full_path:
+                return ""
+            file_name = full_path.split("\\")[-1]
+            return file_name
+        except Exception:
+            return ""
+
     """
     High-level automation helper that exposes safe operations to the pipeline.
 

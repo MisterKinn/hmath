@@ -765,8 +765,8 @@ class MainWindow(QMainWindow):
                 item_wrap.setObjectName("drawer-chat-item-wrap")
                 # Prevent chat items from expanding vertically when list is short
                 item_wrap.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-                item_wrap.setFixedHeight(30)
-                item_wrap.setMaximumHeight(30)
+                item_wrap.setFixedHeight(48)
+                item_wrap.setMaximumHeight(48)
                 h = QHBoxLayout(item_wrap)
                 # Slightly tighter wrap padding and spacing for compact sidebar
                 h.setContentsMargins(4, 0, 4, 0)
@@ -1716,7 +1716,7 @@ class MainWindow(QMainWindow):
         self.send_btn.setObjectName("send-button")
         self.send_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.send_btn.setToolTip("메시지 전송")
-        self.send_btn.setFixedSize(44, 44)
+        self.send_btn.setFixedSize(52, 52)
         self.send_btn.setStyleSheet("QPushButton { background: transparent; border: none; padding: 0; }")
         self.send_btn.clicked.connect(self._handle_run_clicked)
         self._set_send_svg_icon()
@@ -2088,69 +2088,55 @@ class MainWindow(QMainWindow):
         lyt.addWidget(header)
 
         # Primary actions (New Chat / Search)
-        self.drawer_new_chat_btn = QPushButton("새 채팅")
-        self.drawer_new_chat_btn.setObjectName("drawer-action")
-        self.drawer_new_chat_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.drawer_new_chat_btn.setMinimumHeight(48)
-        self.drawer_new_chat_btn.clicked.connect(self._new_chat)
-        # Use theme-specific SVG assets for the icon
-        try:
-            assets_dir = Path(__file__).resolve().parents[1] / "public" / "img"
-            # Always check the current theme before loading the icon
+        def make_drawer_button(text, icon_name, click_handler, bg_color=None):
+            btn = QPushButton(text)
+            btn.setObjectName("drawer-action")
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setMinimumHeight(40)
+            btn.setMaximumHeight(40)
+            btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             is_dark = self.dark_mode if hasattr(self, 'dark_mode') else False
-            icon_name = "new-dark.svg" if is_dark else "new-light.svg"
-            new_icon = assets_dir / icon_name
-            if new_icon.exists():
-                self.drawer_new_chat_btn.setIcon(QIcon(str(new_icon)))
-                self.drawer_new_chat_btn.setIconSize(QSize(22, 22))
-            else:
-                # fallback: try the other icon
-                alt_icon = assets_dir / ("new-light.svg" if is_dark else "new-dark.svg")
-                if alt_icon.exists():
-                    self.drawer_new_chat_btn.setIcon(QIcon(str(alt_icon)))
-                    self.drawer_new_chat_btn.setIconSize(QSize(22, 22))
-                else:
-                    self.drawer_new_chat_btn.setIcon(QIcon())
-        except Exception:
-            self.drawer_new_chat_btn.setIcon(QIcon())
-        # Group primary actions into a compact container so the spacing between them is narrower
+            text_color = "#fff" if is_dark else "#0f1724"
+            hover_bg = "#23272e" if is_dark else "#f4f6f8"
+            style = f"""
+                QPushButton#drawer-action {{
+                    background-color: {bg_color or 'transparent'};
+                    border-radius: 8px;
+                    font-size: 15px;
+                    font-weight: 800;
+                    color: {text_color};
+                    text-align: left;
+                    padding-left: 12px;
+                    min-height: 20px;
+                    max-height: 20px;
+                    qproperty-alignment: AlignVCenter;
+                }}
+                QPushButton#drawer-action:hover {{
+                    background-color: {hover_bg};
+                    border-radius: 8px;
+                }}
+            """
+            btn.setStyleSheet(style)
+            btn.clicked.connect(click_handler)
+            assets_dir = Path(__file__).resolve().parents[1] / "public" / "img"
+            icon_path = assets_dir / (icon_name if not is_dark else icon_name.replace('light', 'dark'))
+            if not icon_path.exists():
+                alt_icon = assets_dir / (icon_name.replace('light', 'dark') if not is_dark else icon_name.replace('dark', 'light'))
+                icon_path = alt_icon if alt_icon.exists() else None
+            if icon_path and icon_path.exists():
+                btn.setIcon(QIcon(str(icon_path)))
+                btn.setIconSize(QSize(22, 22))
+            return btn
+
+        self.drawer_new_chat_btn = make_drawer_button("새 채팅", "new-light.svg", self._new_chat)
         actions_wrap = QWidget()
         aw_lyt = QVBoxLayout(actions_wrap)
         aw_lyt.setContentsMargins(0, 0, 0, 0)
-        # Narrower spacing between the two primary buttons only
         aw_lyt.setSpacing(0)
-        try:
-            # Inline styling for tight vertical rhythm without touching global QSS
-            # Reduce bottom margin to bring the buttons closer
-            self.drawer_new_chat_btn.setStyleSheet("padding:8px 10px; margin-top:2px; margin-bottom:0px;")
-        except Exception:
-            pass
+        aw_lyt.addSpacing(24)  # Move new chat lower
         aw_lyt.addWidget(self.drawer_new_chat_btn)
-
-        # Remove spacer and directly style the search button to sit closer to the new-chat button
-        self.drawer_search_btn = QPushButton("채팅 검색")
-        self.drawer_search_btn.setObjectName("drawer-action")
-        self.drawer_search_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.drawer_search_btn.setMinimumHeight(48)
-        self.drawer_search_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        try:
-            self.drawer_search_btn.setStyleSheet("margin-top:-8px; margin-bottom: 4px; padding:6px 10px; font-size:15px; font-weight:800;")
-        except Exception:
-            pass
-        self.drawer_search_btn.clicked.connect(self._open_chat_search)
-        # Use theme-specific SVG assets for the icon
-        try:
-            search_icon = assets_dir / ("search-dark.svg" if getattr(self, "dark_mode", False) else "search-light.svg")
-            if not search_icon.exists():
-                alt = assets_dir / ("search-light.svg" if getattr(self, "dark_mode", False) else "search-dark.svg")
-                search_icon = alt if alt.exists() else search_icon
-            if search_icon.exists():
-                self.drawer_search_btn.setIcon(QIcon(str(search_icon)))
-                self.drawer_search_btn.setIconSize(QSize(22, 22))
-            else:
-                self.drawer_search_btn.setIcon(QIcon())
-        except Exception:
-            self.drawer_search_btn.setIcon(QIcon())
+        aw_lyt.addSpacing(0)   # Reduce gap between buttons
+        self.drawer_search_btn = make_drawer_button("채팅 검색", "search-light.svg", self._open_chat_search)
         aw_lyt.addWidget(self.drawer_search_btn)
         lyt.addWidget(actions_wrap)
 
@@ -3703,13 +3689,14 @@ class MainWindow(QMainWindow):
 
             # Model families and human-friendly descriptions (cheapest vision-capable tiers)
             models = [
-                ("gpt-5-nano", "GPT (gpt-5-nano) — 전반적인 업무 능력이 좋고, 가장 저렴합니다."),
-                ("gemini-2.0-flash", "Gemini 2.0 Flash — 이미지 처리 능력이 좋고, 속도가 빠릅니다."),
-                ("claude-3-haiku-20240307", "Claude 3 Haiku — 수식 설명에 강하고, 창의적인 업무에 유용합니다."),
+                ("gpt-5-nano", "전반적인 업무 능력이 좋고, 가장 저렴합니다."),
+                ("gemini-2.0-flash", "이미지 처리 능력이 좋고, 속도가 빠릅니다."),
+                ("claude-3-haiku", "수식 설명에 강하고, 창의적인 업무에 유용합니다."),
             ]
 
             # Create rich menu rows using QWidgetAction
             for m, desc in models:
+
                 row = QWidget()
                 row_layout = QHBoxLayout(row)
                 row_layout.setContentsMargins(8, 6, 8, 6)
@@ -3719,19 +3706,19 @@ class MainWindow(QMainWindow):
                 name_lbl = QLabel(m)
                 name_lbl.setStyleSheet(f"font-weight:600; font-size:13px; color:{name_color};")
                 desc_lbl = QLabel(desc)
-                # Use a slightly darker gray for better visibility
                 improved_gray = "#7a869a" if not getattr(self, "dark_mode", False) else "#b0b8c1"
                 desc_lbl.setStyleSheet(f"font-size:12px; color:{improved_gray};")
                 v.addWidget(name_lbl)
                 v.addWidget(desc_lbl)
                 row_layout.addLayout(v)
-                # Right-side checkmark for currently selected model
-                check_lbl = QLabel("")
-                check_lbl.setStyleSheet("font-size:14px; color:#10b981; font-weight:700;")
-                if getattr(self, "_current_model", None) == m:
-                    check_lbl.setText("✓")
                 row_layout.addStretch()
-                row_layout.addWidget(check_lbl)
+
+                # Highlight selected model row with background color (compare display name)
+                current_display = getattr(self, "_current_model_display", None)
+                if current_display == m:
+                    row.setStyleSheet("background-color: #f6f7f9; border-radius: 6px; border: none;")
+                else:
+                    row.setStyleSheet("")
 
                 act = QWidgetAction(menu)
                 act.setDefaultWidget(row)
@@ -6850,17 +6837,17 @@ class MainWindow(QMainWindow):
             self._activate_chat(new_id)
             # Show big black '무엇이든 물어보세요' in the chat area (not as a chat message)
             self._clear_chat_transcript()
-            self.chat_transcript_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
             row = QWidget()
             row_lyt = QHBoxLayout(row)
             row_lyt.setContentsMargins(0, 0, 0, 0)
             row_lyt.setSpacing(0)
             label = QLabel("무엇이든 물어보세요")
-            label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-            label.setStyleSheet("font-size: 36px; color: #000; font-weight: 800; margin: 0 0 0 12px;")
-            row_lyt.addWidget(label, 0, Qt.AlignmentFlag.AlignTop)
-            row.setLayout(row_lyt)
-            self.chat_transcript_layout.addWidget(row, 0, Qt.AlignmentFlag.AlignTop)
+            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            color = "#ffffff" if getattr(self, "dark_mode", False) else "#000000"
+            label.setStyleSheet(f"font-size: 36px; color: {color}; font-weight: 800; margin: 32px 0;")
+            row_lyt.addWidget(label, 0, Qt.AlignmentFlag.AlignCenter)
+            self.chat_transcript_layout.addWidget(row, 0)
+            self.chat_transcript_layout.addStretch(1)
             # Ensure editor is focused and set to default script
             try:
                 if hasattr(self, "script_edit"):

@@ -1,3 +1,35 @@
+/* Hide checkmark for all possible Qt widgets */
+QMenu::indicator,
+QListView::indicator,
+QComboBox::indicator,
+QAbstractItemView::indicator {
+    width: 0;
+    height: 0;
+    image: none !important;
+    border: none !important;
+    background: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    min-width: 0 !important;
+    min-height: 0 !important;
+    max-width: 0 !important;
+    max-height: 0 !important;
+}
+/* Forcefully hide checkmark indicator in all menus */
+QMenu::indicator {
+    width: 0;
+    height: 0;
+    image: none !important;
+}
+/* Remove checkmark for selected model (force hide image) */
+QMenu::item:selected:!active, QMenu::item:checked {
+    background: #f6f7f9 !important;
+    color: #222 !important;
+    border: none !important;
+    outline: none !important;
+    box-shadow: none !important;
+    image: none !important;
+}
 #hwp-filename-text {
     background: transparent;
     padding: 4px 8px;
@@ -474,9 +506,22 @@ QWidget#model-dropdown, QFrame#model-dropdown {
 
 /* Style for model selection dropdown items */
 QWidget.model-item-selected, QLabel.model-item-selected, QPushButton.model-item-selected {
-    background: #e8f0fe !important;
-    color: #174ea6 !important;
+    background: #f6f7f9 !important; /* matches screenshot */
+    color: #222 !important;
     border-radius: 6px;
+    border: none !important;
+    outline: none !important;
+    box-shadow: none !important;
+}
+
+/* Remove checkmark for selected model (if using QMenu/QListView/QComboBox) */
+QMenu::item:selected:!active, QMenu::item:checked {
+    background: #f6f7f9 !important;
+    color: #222 !important;
+    border: none !important;
+    outline: none !important;
+    box-shadow: none !important;
+    image: none !important;
 }
 
 /* Optional: style for non-selected items */
