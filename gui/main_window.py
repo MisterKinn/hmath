@@ -332,6 +332,10 @@ class ScriptWorker(QThread):
 
 
 class MainWindow(QMainWindow):
+    def _handle_file_drop_in_input(self, files):
+        """Handle files dropped into the script_edit input area. Stub implementation."""
+        print(f"[DEBUG] Files dropped in input: {files}")
+        # TODO: Implement actual file handling logic if needed
     def _export_chats(self) -> None:
         """Export all chats to a JSON file with enhanced dialog design."""
         from PySide6.QtWidgets import QFileDialog, QDialog, QVBoxLayout, QLabel, QPushButton
@@ -507,6 +511,7 @@ class MainWindow(QMainWindow):
         # Set application-wide font to Pretendard
         app_font = QFont("Pretendard")
         app_font.setPointSize(14)
+        app_font.setWeight(QFont.Weight.Normal)  # Use Normal (400) for slightly thin, or QFont.Weight.Light for thinner
         self.setFont(app_font)
         
         self._build_ui()
@@ -562,76 +567,93 @@ class MainWindow(QMainWindow):
                     return
         event.ignore()
 
-    def dragMoveEvent(self, event) -> None:
-        """Handle drag move event."""
-        if event.mimeData().hasUrls():
-            event.acceptProposedAction()
-        else:
-            event.ignore()
+    def _update_hwp_filename(self) -> None:
+        """Automatically detect and update the currently open HWP document filename. Display as plain text only."""
+        import subprocess
+        import platform
+        import os
+        def get_current_hwp_filename():
+            process_names = ["Hancom Office HWP", "한글", "HWP", "Hwp", "hwp"]
+            found = False
+            for proc in process_names:
+                print(f"[DEBUG] Trying process name for HWP: '{proc}'")
+                script = f'''
+                tell application "System Events"
+    tell application process "Hancom Office HWP"
+        get name of front window
+    end tell
+end tell
 
-    def dropEvent(self, event) -> None:
-        """Handle drop event for image/PDF files - supports multiple files."""
-        if event.mimeData().hasUrls():
-            files_added = False
-            for url in event.mimeData().urls():
-                file_path = url.toLocalFile()
-                if file_path.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.pdf')):
-                    print(f"[MainWindow] File dropped: {file_path}")
-                    # Add to selected files and show preview
-                    if file_path not in self.selected_files:
-                        self.selected_files.append(file_path)
-                        self._add_image_preview(file_path)
-                        files_added = True
-            if files_added:
-                event.acceptProposedAction()
-                return
-        event.ignore()
-    
-    def _handle_file_drop_in_input(self, file_path: str) -> None:
-        """Handle file drop in the input text field - add to attachments instead of inserting path."""
-        print(f"[MainWindow] File dropped in input field: {file_path}")
-        if file_path not in self.selected_files:
-            self.selected_files.append(file_path)
-            self._add_image_preview(file_path)
+                tell application "System Events"
+                    tell process "Hancom Office HWP"
+                        if (count of windows) > 0 then
+                            set windowTitle to name of front window
+                            return windowTitle
+                        else
+                            return ""
+                        end if
+                    end tell
+                end tell
+                '''
+                try:
+                    result = subprocess.run([
+                        "osascript", "-e", script
+                    ], capture_output=True, text=True)
+                    print(f"[DEBUG] osascript ({proc}) stdout: {result.stdout.strip()}")
+                    print(f"[DEBUG] osascript ({proc}) stderr: {result.stderr.strip()}")
+                    hwp_title = result.stdout.strip()
+                    if hwp_title:
+                        print(f"[DEBUG] Found HWP window title with process '{proc}': {hwp_title}")
+                        found = True
+                        return hwp_title
+                except Exception as e:
+                    print(f"[DEBUG] Exception running osascript for process {proc}: {e}")
+            if not found:
+                print(f"[DEBUG] None of the process names matched a running HWP instance: {process_names}")
+            return None
 
-    def _snapshot_current_chat(self) -> None:
-        """Save brief snapshot of the currently active chat into the in-memory store.
-
-        This is intentionally lightweight and tolerant — used before creating a new
-        chat so we don't lose the current editor/log state.
-        """
         try:
-            if not self._current_chat_id:
-                return
-            for chat in self._chats:
-                if chat.get("id") == self._current_chat_id:
-                    chat["script"] = getattr(self, "script_edit", None).toPlainText() if hasattr(self, "script_edit") else chat.get("script", "")
-                    chat["log"] = getattr(self, "log_output", None).toPlainText() if hasattr(self, "log_output") else chat.get("log", "")
-                    chat["updated_at"] = time.time()
-                    return
-            # If no existing chat matches, append one
-            self._chats.insert(0, {
-                "id": self._current_chat_id,
-                "title": "Saved chat",
-                "log": getattr(self, "log_output", None).toPlainText() if hasattr(self, "log_output") else "",
-                "script": getattr(self, "script_edit", None).toPlainText() if hasattr(self, "script_edit") else "",
-                "created_at": time.time(),
-                "updated_at": time.time(),
-            })
-        except Exception:
-            # Be defensive — snapshot failure should not crash the UI
-            pass
-
-    def _schedule_persist(self) -> None:
-        """Schedule a debounced persist of the chat store to disk (no-op quick save).
-
-        The real persistence layer can be added later; for now we keep a lightweight
-        on-disk JSON so state survives simple restarts during development.
-        """
-        try:
-            # Always save the current chat's state (including messages) before persisting
-            self._save_current_chat_state()
-            self._persist_timer.start(400)
+            filename = None
+            if hasattr(self, "selected_files"):
+                print(f"[DEBUG] self.selected_files: {self.selected_files}")
+                if not self.selected_files:
+                    if platform.system() == "Darwin":
+                        hwp_title = get_current_hwp_filename()
+                        if hwp_title:
+                            filename = hwp_title
+                            print(f"[DEBUG] macOS HWP window title: {filename}")
+                        else:
+                            print("[DEBUG] No HWP window title detected from osascript.")
+                else:
+                    # Prefer .hwp/.hwpx, but fallback to first file if present
+                    for f in self.selected_files:
+                        print(f"[DEBUG] Checking file: {f}")
+                        if isinstance(f, str) and f.lower().endswith((".hwp", ".hwpx")):
+                            filename = os.path.basename(f)
+                            print(f"[DEBUG] Detected HWP file: {filename}")
+                            break
+                    if filename is None:
+                        # Fallback: just use the first file's basename
+                        first_file = self.selected_files[0]
+                        if isinstance(first_file, str):
+                            filename = os.path.basename(first_file)
+                            print(f"[DEBUG] Fallback to first file: {filename}")
+            if filename is None:
+                # Fallback: use last known filename or default
+                last_filename = getattr(self, '_last_hwp_filename', None)
+                if last_filename:
+                    filename = last_filename
+                    print(f"[DEBUG] Fallback to _last_hwp_filename: {filename}")
+                else:
+                    filename = "한글 문서"
+                    print("[DEBUG] Fallback to default: 한글 문서")
+            self.hwp_filename_label.setText(filename)
+            # Style is now set once in the constructor; do not override here
+            self._last_hwp_filename = filename
+        except Exception as e:
+            print(f"[DEBUG] Exception in _update_hwp_filename: {e}")
+            self.hwp_filename_label.setText("한글 문서")
+            self._last_hwp_filename = "한글 문서"
         except Exception:
             pass
 
@@ -791,16 +813,11 @@ class MainWindow(QMainWindow):
                 edit_btn.setFixedSize(28, 28)
                 try:
                     assets_dir = Path(__file__).resolve().parents[1] / "public" / "img"
-                    # Prefer a dark-mode edit icon when dark mode is enabled
+                    # Use SVG icons for edit button, supporting light/dark mode
                     edit_candidate = None
-                    if getattr(self, 'dark_mode', False):
-                        d = assets_dir / "edit-dark.png"
-                        if d.exists():
-                            edit_candidate = d
-                    if edit_candidate is None:
-                        e = assets_dir / "edit.png"
-                        if e.exists():
-                            edit_candidate = e
+                    svg_path = assets_dir / ("edit-dark.svg" if getattr(self, 'dark_mode', False) else "edit-light.svg")
+                    if svg_path.exists():
+                        edit_candidate = svg_path
                     if edit_candidate is not None:
                         edit_btn.setIcon(QIcon(str(edit_candidate)))
                         edit_btn.setIconSize(QSize(18, 18))
@@ -828,12 +845,12 @@ class MainWindow(QMainWindow):
                 del_btn.setAutoRaise(False)
                 # Slightly smaller delete button to match reference
                 del_btn.setFixedSize(28, 28)
-                # Prefer the provided trashcan.png asset; fall back to painted icon if missing
+                # Use remove-light.svg and remove-dark.svg for the remove button, supporting light/dark mode
                 try:
                     assets_dir = Path(__file__).resolve().parents[1] / "public" / "img"
-                    asset_path = assets_dir / "trashcan.png"
-                    if asset_path.exists():
-                        del_btn.setIcon(QIcon(str(asset_path)))
+                    svg_path = assets_dir / ("remove-dark.svg" if getattr(self, 'dark_mode', False) else "remove-light.svg")
+                    if svg_path.exists():
+                        del_btn.setIcon(QIcon(str(svg_path)))
                         del_btn.setIconSize(QSize(16, 16))
                     else:
                         icon = self._render_delete_icon(16)
@@ -1608,16 +1625,26 @@ class MainWindow(QMainWindow):
         self.hwp_add_btn.clicked.connect(self._handle_add_file)
         bottom_row.addWidget(self.hwp_add_btn)
 
-        # HWP filename display (pill)
-        self.hwp_filename_label = QLabel("한글 문서")
-        self.hwp_filename_label.setObjectName("hwp-filename")
-        try:
-            self.hwp_filename_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        except Exception:
-            pass
-        self._apply_hwp_pill_style()
+        # HWP filename display (plain text only, no border, no pill, no background)
+        self.hwp_filename_label = QLabel("")
+        self.hwp_filename_label.setObjectName("hwp-filename-label")
+        self.hwp_filename_label.setMinimumWidth(120)
+        self.hwp_filename_label.setMinimumHeight(32)
+        self.hwp_filename_label.setStyleSheet(
+            """
+            QLabel#hwp-filename-label {
+                background: transparent;
+                color: #111;
+                font-size: 16px;
+                font-weight: 600;
+                padding: 8px 16px;
+                border: none;
+                border-radius: 4px;
+                margin-left: -15px;
+            }
+            """
+        )
         bottom_row.addWidget(self.hwp_filename_label)
-        bottom_row.addSpacing(8)
 
         # AI selector button
         self.ai_selector_btn = QPushButton("[AI]")
@@ -3513,13 +3540,17 @@ class MainWindow(QMainWindow):
 
     def _handle_add_file(self) -> None:
         """Handle combined file/image upload button click - supports multiple selections."""
-        file_paths, _ = QFileDialog.getOpenFileNames(  # Changed to getOpenFileNames for multiple selection
+        file_paths, _ = QFileDialog.getOpenFileNames(
             self,
             "파일 또는 이미지 선택 (여러 개 선택 가능)",
             "",
-            "이미지 파일 (*.png *.jpg *.jpeg *.gif *.bmp);;PDF 파일 (*.pdf);;모든 파일 (*)"
+            "이미지 파일 (*.png *.jpg *.jpeg *.gif *.bmp);;PDF 파일 (*.pdf);;HWP 파일 (*.hwp *.hwpx);;모든 파일 (*)"
         )
         if file_paths:
+            # Ensure selected_files is always initialized
+            if not hasattr(self, "selected_files") or not isinstance(self.selected_files, list):
+                self.selected_files = []
+            hwp_found = False
             for file_path in file_paths:
                 # Store the uploaded file path for AI to use
                 if file_path not in self.selected_files:
@@ -3527,12 +3558,15 @@ class MainWindow(QMainWindow):
                     self._add_image_preview(file_path)
                     self._append_log(f"📎 파일 추가됨: {Path(file_path).name}")
                     print(f"[MainWindow] File uploaded and added to selected_files: {file_path}")
-
-            
-            # Update HWP filename if it's a document
-            filename = Path(file_path).name
-            if filename.lower().endswith(('.hwp', '.hwpx')):
-                self.hwp_filename_label.setText(filename)
+                # If it's an HWP file, update the filename label
+                if file_path.lower().endswith((".hwp", ".hwpx")):
+                    hwp_found = True
+            if hwp_found:
+                self._update_hwp_filename()
+            # If no HWP file, still update label in case of removal
+            elif any(f.lower().endswith((".hwp", ".hwpx")) for f in self.selected_files):
+                self._update_hwp_filename()
+            # Removed undefined 'filename' usage; label is updated only via _update_hwp_filename
 
     def _add_image_preview(self, file_path: str) -> None:
         """Add image preview thumbnail with remove button at top-right corner."""
@@ -3745,24 +3779,23 @@ class MainWindow(QMainWindow):
                 name_lbl = QLabel(m)
                 name_lbl.setStyleSheet(f"font-weight:600; font-size:13px; color:{name_color};")
                 desc_lbl = QLabel(desc)
-                # Use a slightly darker gray for better visibility
                 improved_gray = "#7a869a" if not getattr(self, "dark_mode", False) else "#b0b8c1"
                 desc_lbl.setStyleSheet(f"font-size:12px; color:{improved_gray};")
                 v.addWidget(name_lbl)
                 v.addWidget(desc_lbl)
                 row_layout.addLayout(v)
-                # Right-side checkmark for currently selected model
-                check_lbl = QLabel("")
-                check_lbl.setStyleSheet("font-size:14px; color:#10b981; font-weight:700;")
-                if getattr(self, "_current_model", None) == m:
-                    check_lbl.setText("✓")
                 row_layout.addStretch()
-                row_layout.addWidget(check_lbl)
+
+                # Highlight selected model row with background color
+                if getattr(self, "_current_model", None) == m:
+                    highlight_bg = "#e8f0fe" if not getattr(self, "dark_mode", False) else "#1a2642"
+                    row.setStyleSheet(f"background-color: {highlight_bg}; border-radius: 8px;")
+                else:
+                    row.setStyleSheet("")
 
                 act = QWidgetAction(menu)
                 act.setDefaultWidget(row)
 
-                # clicking the row should set the model
                 def make_clicked(name):
                     def _clicked(_=None):
                         try:
@@ -3771,7 +3804,6 @@ class MainWindow(QMainWindow):
                             pass
                     return _clicked
 
-                # Connect both widget and action triggers
                 act.triggered.connect(make_clicked(m))
                 row.mouseReleaseEvent = lambda ev, nm=m: (make_clicked(nm)(), menu.close())
                 menu.addAction(act)
@@ -4143,13 +4175,12 @@ class MainWindow(QMainWindow):
                 except Exception:
                     icon_pix = _load_icon_for(icon_key, sz=22, tint_black=False)
             elif icon_key == 'edit':
-                # Use explicit dark-mode asset for the 코드 입력 item
+                # Use SVG edit icon for the 코드 입력 item, supporting light/dark mode
                 try:
                     assets_dir = Path(__file__).resolve().parents[1] / "public" / "img"
-                    if self.dark_mode:
-                        cand = assets_dir / "edit-dark.png"
-                        if cand.exists():
-                            icon_pix = QPixmap(str(cand)).scaled(20, 20, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                    svg_path = assets_dir / ("edit-dark.svg" if self.dark_mode else "edit-light.svg")
+                    if svg_path.exists():
+                        icon_pix = QIcon(str(svg_path)).pixmap(20, 20)
                     if icon_pix is None:
                         icon_pix = _load_icon_for(icon_key, sz=20, tint_black=False)
                 except Exception:
@@ -6848,73 +6879,82 @@ class MainWindow(QMainWindow):
         
         try:
             current_text = self.hwp_filename_label.text()
-            # Remove existing status indicators
-            for indicator in ["🟢 ", "🔴 ", "⚠️ "]:
-                current_text = current_text.replace(indicator, "")
-            
-            # Add appropriate status indicator
-            if connected:
-                self.hwp_filename_label.setText(f"🟢 {current_text}")
-            else:
-                self.hwp_filename_label.setText(f"🔴 {current_text}")
+            self.hwp_filename_label.setText(f"{current_text}")
         except Exception as e:
             print(f"[HWP Status] Error updating indicator: {e}")
 
     def _update_hwp_filename(self) -> None:
-        """Automatically detect and update the currently open HWP document filename."""
+        """Automatically detect and update the currently open HWP document filename. Display as plain text only."""
+        import os
         try:
-            # Check connection status
-            hwp_connected = False
-            try:
-                test_hwp = HwpController()
-                test_hwp.connect()
-                hwp_connected = True
-            except Exception:
-                pass
-            
-            # Update status indicator
-            self._update_hwp_status_indicator(connected=hwp_connected)
-            
-            if platform.system() == "Windows":
-                import win32gui  # type: ignore[import-not-found]
-                import re
-                
-                # Find HWP window
-                hwp_window = win32gui.FindWindow("HwpFrame", None)
-                if hwp_window:
-                    # Get window title which contains the filename
-                    title = win32gui.GetWindowText(hwp_window)
-                    # Title format: "filename.hwp - 한글" or "filename.hwp"
-                    # Extract filename from title
-                    match = re.search(r"([^\\\/]+\.hwp[x]?)", title, re.IGNORECASE)
-                    if match:
-                        filename = match.group(1)
-                        if filename != self._last_hwp_filename:
-                            self._last_hwp_filename = filename
-                            # Preserve status indicator
-                            current_text = self.hwp_filename_label.text()
-                            if "🟢 " in current_text or "🔴 " in current_text:
-                                indicator = current_text.split(" ")[0] + " "
-                                self.hwp_filename_label.setText(indicator + filename)
-                            else:
-                                self.hwp_filename_label.setText(filename)
-                    return
-                
-                # If no HWP window found, reset to default
-                if self._last_hwp_filename != "한글 문서":
-                    self._last_hwp_filename = "한글 문서"
-                    current_text = self.hwp_filename_label.text()
-                    if "🟢 " in current_text or "🔴 " in current_text:
-                        indicator = current_text.split(" ")[0] + " "
-                        self.hwp_filename_label.setText(indicator + "한글 문서")
-                    else:
-                        self.hwp_filename_label.setText("한글 문서")
-            else:
-                # macOS/Linux: Only update from file picker, not from active window
-                pass
+            filename = None
+            if hasattr(self, "selected_files"):
+                if not self.selected_files:
+                    # Try to get HWP window title on macOS
+                    import platform
+                    if platform.system() == "Darwin":
+                        import subprocess
+                        script = '''
+                        tell application "System Events"
+                            tell application process "Hancom Office HWP"
+                                get name of front window
+                            end tell
+                        end tell
+
+                        '''
+                        try:
+                            result = subprocess.run([
+                                "osascript", "-e", script
+                            ], capture_output=True, text=True)
+                            hwp_title = result.stdout.strip()
+                            if hwp_title:
+                                filename = hwp_title
+                        except Exception as e:
+                            print(f"[DEBUG] Exception running osascript: {e}")
+                else:
+                    # Prefer .hwp/.hwpx, but fallback to first file if present
+                    for f in self.selected_files:
+                        if isinstance(f, str) and f.lower().endswith((".hwp", ".hwpx")):
+                            filename = os.path.basename(f)
+                            break
+                    if filename is None:
+                        # Fallback: just use the first file's basename
+                        first_file = self.selected_files[0]
+                        if isinstance(first_file, str):
+                            filename = os.path.basename(first_file)
+                            print(f"[DEBUG] Fallback to first file: {filename}")
+            if filename is None:
+                # Fallback: use last known filename or default
+                last_filename = getattr(self, '_last_hwp_filename', None)
+                if last_filename:
+                    filename = last_filename
+                    print(f"[DEBUG] Fallback to _last_hwp_filename: {filename}")
+                else:
+                    filename = ""
+                    print("[DEBUG] Fallback to default: ")
+            self.hwp_filename_label.setText(filename)
+            self.hwp_filename_label.setObjectName("hwp-filename-label")
+            self.hwp_filename_label.setMinimumWidth(120)
+            self.hwp_filename_label.setMinimumHeight(32)
+            self.hwp_filename_label.setStyleSheet("""
+                QLabel#hwp-filename-label {
+                    background: transparent;
+                    color: #111;
+                    font-size: 16px;
+                    font-weight: 600;
+                    padding: 8px 16px;
+                    border: none;
+                    border-radius: 4px;
+                    margin-left: -15px;
+                }
+            """)
+            self._last_hwp_filename = filename
         except Exception as e:
-            # Silently fail - this is a background detection feature
-            print(f"[HWP Detection] Error: {e}")
+            print(f"[DEBUG] Exception in _update_hwp_filename: {e}")
+            self.hwp_filename_label.setText("")
+            self._last_hwp_filename = ""
+            
+        
 
     def _new_chat(self) -> None:
         """Create and switch to a new chat, clearing UI and persisting state."""

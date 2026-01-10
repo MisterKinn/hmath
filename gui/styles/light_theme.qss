@@ -450,3 +450,8 @@ QScrollBar::sub-page:horizontal {
     background-color: transparent;
 }
 
+QLabel#hwp-filename-label {
+    background: transparent !important;
+    background-color: transparent !important;
+}
+
