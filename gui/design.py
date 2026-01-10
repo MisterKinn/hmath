@@ -154,26 +154,31 @@ def apply_help_button_style(window) -> None:
     if getattr(window, "hwp_filename_label", None):
         window.hwp_filename_label.setStyleSheet(hwp_style)
 
-    # Send button style
-    # Prominent primary send button (blue background, white glyph/text)
+    # Send button style (no border, no circle, just icon)
     send_style = f"""
     QPushButton#composer-send {{
-        background-color: #5377f6;
-        color: #ffffff;
-        border: none;
-        border-radius: 40px;
-        min-width: 80px;
-        min-height: 80px;
-        max-width: 80px;
-        max-height: 80px;
+        background-color: transparent;
+        color: #222;
+        border: none !important;
+        border-radius: 0 !important;
+        min-width: 44px;
+        min-height: 44px;
+        max-width: 44px;
+        max-height: 44px;
         font-weight: 700;
         font-size: 26px;
-    }}  
+        box-shadow: none !important;
+        outline: none !important;
+    }}
     QPushButton#composer-send:hover {{
-        background-color: #3e5fc7;
+        background-color: #ececf1;
+        border: none !important;
+        box-shadow: none !important;
     }}
     QPushButton#composer-send:pressed {{
-        background-color: #2e47a0;
+        background-color: #e5e7eb;
+        border: none !important;
+        box-shadow: none !important;
     }}
     """
     if getattr(window, "run_button", None):

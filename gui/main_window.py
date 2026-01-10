@@ -1591,20 +1591,20 @@ class MainWindow(QMainWindow):
         self.hwp_add_btn.setStyleSheet("QPushButton#hwp-add-button { background-color: transparent; border: none; border-radius: 8px; }")
         try:
             assets_dir = Path(__file__).resolve().parents[1] / "public" / "img"
-            candidate = assets_dir / ("plus-dark.png" if getattr(self, 'dark_mode', False) else "plus.png")
+            candidate = assets_dir / ("add-dark.svg" if getattr(self, 'dark_mode', False) else "add-light.svg")
             if not candidate.exists():
-                alt = assets_dir / ("plus.png" if getattr(self, 'dark_mode', False) else "plus-dark.png")
+                alt = assets_dir / ("add-light.svg" if getattr(self, 'dark_mode', False) else "add-dark.svg")
                 if alt.exists():
                     candidate = alt
                 else:
                     candidate = None
             if candidate is not None:
                 self.hwp_add_btn.setIcon(QIcon(str(candidate)))
-                self.hwp_add_btn.setIconSize(QSize(24, 24))
+                self.hwp_add_btn.setIconSize(QSize(28, 28))
             else:
-                self._apply_button_icon(self.hwp_add_btn, "plus", "+", QSize(24, 24))
+                self._apply_button_icon(self.hwp_add_btn, "add", "+", QSize(28, 28))
         except Exception:
-            self._apply_button_icon(self.hwp_add_btn, "plus", "+", QSize(24, 24))
+            self._apply_button_icon(self.hwp_add_btn, "add", "+", QSize(28, 28))
         self.hwp_add_btn.clicked.connect(self._handle_add_file)
         bottom_row.addWidget(self.hwp_add_btn)
 
@@ -1678,15 +1678,27 @@ class MainWindow(QMainWindow):
             pass
         
         # Right side: Send button (circular)
-        self.run_button = QPushButton("")
-        self.run_button.setObjectName("composer-send")
-        # Style/size is applied via _apply_send_button_style() so theme toggles stay consistent.
-        self.run_button.setFont(QFont("Pretendard", 22, QFont.Weight.Bold))
-        self.run_button.setToolTip("스크립트를 한글에서 실행합니다 (Ctrl+Enter)")
-        self.run_button.clicked.connect(self._handle_run_clicked)
-        self._apply_send_button_style()
-        bottom_row.addWidget(self.run_button)
-        # Icon is applied via _apply_send_button_style()
+        # Add new send button from scratch, next to upload icon
+        self.send_btn = QPushButton()
+        self.send_btn.setObjectName("composer-send")
+        self.send_btn.setCursor(Qt.PointingHandCursor)
+        self.send_btn.setToolTip("스크립트 전송 (Ctrl+Enter)")
+        self.send_btn.setFlat(True)
+        self.send_btn.setStyleSheet("QPushButton#composer-send { background: none; border: none; border-radius: 0; padding: 0; margin: 0; } QPushButton#composer-send:hover { background: none; }")
+        # Set SVG icon based on theme
+        def set_send_icon():
+            from pathlib import Path
+            assets_dir = Path(__file__).resolve().parents[1] / "public" / "img"
+            icon_path = assets_dir / ("send-dark.svg" if getattr(self, 'dark_mode', False) else "send-light.svg")
+            if not icon_path.exists():
+                icon_path = assets_dir / ("send-light.svg" if getattr(self, 'dark_mode', False) else "send-dark.svg")
+            self.send_btn.setIcon(QIcon(str(icon_path)))
+            self.send_btn.setIconSize(QSize(28, 28))
+        set_send_icon()
+        self.send_btn.clicked.connect(self._handle_run_clicked)
+        bottom_row.addWidget(self.send_btn)
+        self._set_send_icon = set_send_icon  # Allow theme toggling to update icon
+        # Send button removed as requested. Only upload icon remains.
         
         script_layout.addLayout(bottom_row)
         
@@ -2062,14 +2074,13 @@ class MainWindow(QMainWindow):
         # Prefer theme-specific assets for the icon (write.png / write-dark.png)
         try:
             assets_dir = Path(__file__).resolve().parents[1] / "public" / "img"
-            write_icon = assets_dir / ("write-dark.png" if getattr(self, "dark_mode", False) else "write.png")
-            if not write_icon.exists():
-                # fall back to the other variant if the preferred one is missing
-                alt = assets_dir / ("write.png" if getattr(self, "dark_mode", False) else "write-dark.png")
-                write_icon = alt if alt.exists() else write_icon
-            if write_icon.exists():
-                self.drawer_new_chat_btn.setIcon(QIcon(str(write_icon)))
-                self.drawer_new_chat_btn.setIconSize(QSize(18, 18))
+            new_icon = assets_dir / ("new-dark.svg" if getattr(self, "dark_mode", False) else "new-light.svg")
+            if not new_icon.exists():
+                alt = assets_dir / ("new-light.svg" if getattr(self, "dark_mode", False) else "new-dark.svg")
+                new_icon = alt if alt.exists() else new_icon
+            if new_icon.exists():
+                self.drawer_new_chat_btn.setIcon(QIcon(str(new_icon)))
+                self.drawer_new_chat_btn.setIconSize(QSize(22, 22))
             else:
                 self._set_drawer_item_icon(self.drawer_new_chat_btn, "edit_square", fallback="✏", px=18)
         except Exception:
@@ -2105,14 +2116,14 @@ class MainWindow(QMainWindow):
         self.drawer_search_btn.clicked.connect(self._open_chat_search)
         # Prefer theme-specific assets for the icon (search.png / search-dark.png)
         try:
-            search_icon = assets_dir / ("search-dark.png" if getattr(self, "dark_mode", False) else "search.png")
+            search_icon = assets_dir / ("search-dark.svg" if getattr(self, "dark_mode", False) else "search-light.svg")
             if not search_icon.exists():
                 # fall back to the other variant if the preferred one is missing
-                alt = assets_dir / ("search.png" if getattr(self, "dark_mode", False) else "search-dark.png")
+                alt = assets_dir / ("search-light.svg" if getattr(self, "dark_mode", False) else "search-dark.svg")
                 search_icon = alt if alt.exists() else search_icon
             if search_icon.exists():
                 self.drawer_search_btn.setIcon(QIcon(str(search_icon)))
-                self.drawer_search_btn.setIconSize(QSize(18, 18))
+                self.drawer_search_btn.setIconSize(QSize(22, 22))
             else:
                 self._set_drawer_item_icon(self.drawer_search_btn, "search", fallback="🔎", px=18)
         except Exception:
@@ -2953,89 +2964,23 @@ class MainWindow(QMainWindow):
             assets_dir = Path(__file__).resolve().parents[1] / "public" / "img"
 
     def _set_send_icon(self, size_px: int = 40) -> None:
-        """Set the composer send button icon to send.png / send-dark.png if available, stripping background as needed."""
+        """Set the composer send button icon to send-light.svg / send-dark.svg if available, stripping background as needed."""
         try:
             if getattr(self, 'run_button', None) is None:
                 return
             assets_dir = Path(__file__).resolve().parents[1] / "public" / "img"
-            # Prefer dark variant when in dark mode
-            candidate = assets_dir / ("send-dark.png" if getattr(self, 'dark_mode', False) else "send.png")
+            # Prefer SVG variant for best scaling
+            candidate = assets_dir / ("send-dark.svg" if getattr(self, 'dark_mode', False) else "send-light.svg")
             if not candidate.exists():
                 # Try the alternate variant
-                alt = assets_dir / ("send.png" if getattr(self, 'dark_mode', False) else "send-dark.png")
+                alt = assets_dir / ("send-light.svg" if getattr(self, 'dark_mode', False) else "send-dark.svg")
                 if alt.exists():
                     candidate = alt
                 else:
                     candidate = None
             if candidate is not None:
-                # Try setting the file icon directly first (no processing) using a slightly smaller size
-                try:
-                    direct_icon = QIcon(str(candidate))
-                    direct_size = max(12, size_px - 8)
-                    self.run_button.setIcon(direct_icon)
-                    self.run_button.setIconSize(QSize(direct_size, direct_size))
-                    # Quick transparency test on the direct pixmap; if too transparent, fall back to processing
-                    direct_pix = direct_icon.pixmap(direct_size, direct_size)
-                    def _almost_transparent(pix: QPixmap, thresh: float = 0.85) -> bool:
-                        try:
-                            img = pix.toImage().convertToFormat(QImage.Format_ARGB32)
-                            w = img.width(); h = img.height()
-                            total = w * h
-                            if total == 0:
-                                return True
-                            transparent = 0
-                            for y in range(h):
-                                for x in range(w):
-                                    if QColor(img.pixel(x, y)).alpha() < 16:
-                                        transparent += 1
-                            return (transparent / total) >= thresh
-                        except Exception:
-                            return False
-                    if not _almost_transparent(direct_pix, thresh=0.85):
-                        # direct icon looks fine — keep it
-                        self.run_button.setText("")
-                        return
-                except Exception:
-                    # fall through to processing
-                    pass
-
-                # Otherwise, attempt to strip uniform backgrounds (use higher tolerance) and aggressive border removal
-                pix = QPixmap(str(candidate))
-                processed = self._make_pixmap_background_transparent(pix, tolerance=40) or pix
-                try:
-                    corner_alpha = processed.toImage().pixelColor(0, 0).alpha()
-                except Exception:
-                    corner_alpha = 255
-                if corner_alpha > 16:
-                    try:
-                        img = pix.toImage().convertToFormat(QImage.Format_ARGB32)
-                        w = img.width()
-                        h = img.height()
-                        sr = sg = sb = count = 0
-                        for x in range(w):
-                            for y in (0, h - 1):
-                                c = QColor(img.pixel(x, y))
-                                if c.alpha() > 16:
-                                    sr += c.red(); sg += c.green(); sb += c.blue(); count += 1
-                        for y in range(h):
-                            for x in (0, w - 1):
-                                c = QColor(img.pixel(x, y))
-                                if c.alpha() > 16:
-                                    sr += c.red(); sg += c.green(); sb += c.blue(); count += 1
-                        if count > 0:
-                            sr //= count; sg //= count; sb //= count
-                            tol = 80
-                            for yy in range(h):
-                                for xx in range(w):
-                                    c = QColor(img.pixel(xx, yy))
-                                    if abs(c.red() - sr) <= tol and abs(c.green() - sg) <= tol and abs(c.blue() - sb) <= tol:
-                                        img.setPixelColor(xx, yy, QColor(0, 0, 0, 0))
-                            processed = QPixmap.fromImage(img)
-                    except Exception:
-                        pass
-
-                processed = processed.scaled(size_px, size_px, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-                self.run_button.setIcon(QIcon(processed))
+                icon = QIcon(str(candidate))
+                self.run_button.setIcon(icon)
                 self.run_button.setIconSize(QSize(size_px, size_px))
                 self.run_button.setText("")
                 return
@@ -3322,21 +3267,21 @@ class MainWindow(QMainWindow):
         try:
             assets_dir = Path(__file__).resolve().parents[1] / "public" / "img"
             if getattr(self, "drawer_new_chat_btn", None):
-                write_icon = assets_dir / ("write-dark.png" if getattr(self, "dark_mode", False) else "write.png")
-                if not write_icon.exists():
-                    alt = assets_dir / ("write.png" if getattr(self, "dark_mode", False) else "write-dark.png")
-                    write_icon = alt if alt.exists() else write_icon
-                if write_icon.exists():
-                    self.drawer_new_chat_btn.setIcon(QIcon(str(write_icon)))
-                    self.drawer_new_chat_btn.setIconSize(QSize(18, 18))
+                new_icon = assets_dir / ("new-dark.svg" if getattr(self, "dark_mode", False) else "new-light.svg")
+                if not new_icon.exists():
+                    alt = assets_dir / ("new-light.svg" if getattr(self, "dark_mode", False) else "new-dark.svg")
+                    new_icon = alt if alt.exists() else new_icon
+                if new_icon.exists():
+                    self.drawer_new_chat_btn.setIcon(QIcon(str(new_icon)))
+                    self.drawer_new_chat_btn.setIconSize(QSize(22, 22))
             if getattr(self, "drawer_search_btn", None):
-                search_icon = assets_dir / ("search-dark.png" if getattr(self, "dark_mode", False) else "search.png")
+                search_icon = assets_dir / ("search-dark.svg" if getattr(self, "dark_mode", False) else "search-light.svg")
                 if not search_icon.exists():
-                    alt = assets_dir / ("search.png" if getattr(self, "dark_mode", False) else "search-dark.png")
+                    alt = assets_dir / ("search-light.svg" if getattr(self, "dark_mode", False) else "search-dark.svg")
                     search_icon = alt if alt.exists() else search_icon
                 if search_icon.exists():
                     self.drawer_search_btn.setIcon(QIcon(str(search_icon)))
-                    self.drawer_search_btn.setIconSize(QSize(18, 18))
+                    self.drawer_search_btn.setIconSize(QSize(22, 22))
         except Exception:
             pass
         if hasattr(self, "theme_btn"):
@@ -4165,38 +4110,34 @@ class MainWindow(QMainWindow):
             # Use specific keys to decide size and tint; apply special cases
             icon_pix = None
             if icon_key == 'upgrade':
-                # Prefer an explicit dark variant in dark mode if present, otherwise fall back to themed resolver
+                # Prefer SVG variant for upgrade icon
                 try:
                     assets_dir = Path(__file__).resolve().parents[1] / "public" / "img"
-                    cand = assets_dir / ("upgrade-dark.png" if self.dark_mode else "upgrade.png")
+                    cand = assets_dir / ("upgrade-dark.svg" if self.dark_mode else "upgrade-light.svg")
                     if cand.exists():
-                        icon_pix = QPixmap(str(cand)).scaled(20, 20, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                        icon_pix = QIcon(str(cand)).pixmap(22, 22)
                     else:
-                        icon_pix = _load_icon_for(icon_key, sz=20, tint_black=False)
+                        icon_pix = _load_icon_for(icon_key, sz=22, tint_black=False)
                 except Exception:
-                    icon_pix = _load_icon_for(icon_key, sz=20, tint_black=False)
+                    icon_pix = _load_icon_for(icon_key, sz=22, tint_black=False)
             elif icon_key == 'profile':
-                # Prefer theme-specific profile asset when available
+                # Prefer SVG variant for profile icon
                 try:
                     assets_dir = Path(__file__).resolve().parents[1] / "public" / "img"
-                    cand = assets_dir / ("profile-dark.png" if self.dark_mode else "profile.png")
+                    cand = assets_dir / ("profile-dark.svg" if self.dark_mode else "profile-light.svg")
                     if cand.exists():
-                        icon_pix = QPixmap(str(cand)).scaled(20, 20, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                        icon_pix = QIcon(str(cand)).pixmap(22, 22)
                     else:
-                        icon_pix = _load_icon_for(icon_key, sz=20, tint_black=False)
+                        icon_pix = _load_icon_for(icon_key, sz=22, tint_black=False)
                 except Exception:
-                    icon_pix = _load_icon_for(icon_key, sz=20, tint_black=False)
+                    icon_pix = _load_icon_for(icon_key, sz=22, tint_black=False)
             elif icon_key == 'light':
-                # Prefer explicit 'moon-light.svg' in light mode (show moon to switch to dark),
-                # and 'light-dark.svg' in dark mode (show sun to switch to light)
+                # Use light.svg for dark mode and dark.svg for light mode (reversed)
                 try:
                     assets_dir = Path(__file__).resolve().parents[1] / "public" / "img"
-                    if not self.dark_mode:
-                        cand = assets_dir / "moon-light.svg"
-                    else:
-                        cand = assets_dir / "light-dark.svg"
+                    cand = assets_dir / ("light.svg" if self.dark_mode else "dark.svg")
                     if cand.exists():
-                        icon_pix = QPixmap(str(cand)).scaled(22, 22, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                        icon_pix = QIcon(str(cand)).pixmap(22, 22)
                     else:
                         icon_pix = _load_icon_for(icon_key, sz=22, tint_black=False)
                 except Exception:
@@ -4215,59 +4156,23 @@ class MainWindow(QMainWindow):
                     icon_pix = _load_icon_for(icon_key, sz=20, tint_black=False)
                 # Global margins already applied above; no per-item override needed
             elif icon_key == 'settings':
-                # Prefer explicit theme-specific settings asset: settings-dark.svg in dark mode, settings-light.png otherwise.
+                # Use setting-dark.svg for dark mode and setting-light.svg for light mode
                 try:
                     assets_dir = Path(__file__).resolve().parents[1] / "public" / "img"
-                    if self.dark_mode:
-                        cand = assets_dir / "settings-dark.svg"
-                        if cand.exists():
-                            s_pix = QPixmap(str(cand)).scaled(20, 20, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-                            icon_pix = s_pix
-                        else:
-                            # fallback to other candidates
-                            cand2 = assets_dir / "settings-list.png"
-                            if cand2.exists():
-                                s_pix = QPixmap(str(cand2)).scaled(20, 20, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-                                icon_pix = s_pix
-                            else:
-                                icon_pix = _load_icon_for(icon_key, sz=20, tint_black=True)
-                    else:
-                        cand = assets_dir / "settings-light.png"
-                        if cand.exists():
-                            s_pix = QPixmap(str(cand)).scaled(20, 20, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-                            icon_pix = s_pix
-                        else:
-                            cand2 = assets_dir / "settings-list.png"
-                            if cand2.exists():
-                                s_pix = QPixmap(str(cand2)).scaled(20, 20, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-                                icon_pix = s_pix
-                            else:
-                                icon_pix = _load_icon_for(icon_key, sz=20, tint_black=True)
-                except Exception:
-                    icon_pix = _load_icon_for(icon_key, sz=18, tint_black=True)
-                # In dark mode, ensure this icon is white for visibility
-                try:
-                    if icon_pix and self.dark_mode:
-                        out = QPixmap(icon_pix.size())
-                        out.fill(Qt.GlobalColor.transparent)
-                        p = QPainter(out)
-                        try:
-                            p.setRenderHint(QPainter.RenderHint.Antialiasing)
-                            p.fillRect(out.rect(), QColor(255,255,255))
-                            p.setCompositionMode(QPainter.CompositionMode.DestinationIn)
-                            p.drawPixmap(0, 0, icon_pix)
-                        finally:
-                            p.end()
-                        icon_pix = out
-                except Exception:
-                    pass
-            elif icon_key == 'logout':
-                # Prefer explicit dark variant in dark mode, otherwise fall back to themed resolver
-                try:
-                    assets_dir = Path(__file__).resolve().parents[1] / "public" / "img"
-                    cand = assets_dir / ("logout-dark.png" if self.dark_mode else "logout.png")
+                    cand = assets_dir / ("setting-dark.svg" if self.dark_mode else "setting-light.svg")
                     if cand.exists():
-                        icon_pix = QPixmap(str(cand)).scaled(22, 22, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                        icon_pix = QIcon(str(cand)).pixmap(22, 22)
+                    else:
+                        icon_pix = _load_icon_for(icon_key, sz=22, tint_black=False)
+                except Exception:
+                    icon_pix = _load_icon_for(icon_key, sz=22, tint_black=False)
+            elif icon_key == 'logout':
+                # Use logout-dark.svg for dark mode and logout-light.svg for light mode
+                try:
+                    assets_dir = Path(__file__).resolve().parents[1] / "public" / "img"
+                    cand = assets_dir / ("logout-dark.svg" if self.dark_mode else "logout-light.svg")
+                    if cand.exists():
+                        icon_pix = QIcon(str(cand)).pixmap(22, 22)
                     else:
                         icon_pix = _load_icon_for(icon_key, sz=22, tint_black=False)
                 except Exception:
