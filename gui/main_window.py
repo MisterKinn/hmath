@@ -569,61 +569,43 @@ class MainWindow(QMainWindow):
 
     def _update_hwp_filename(self) -> None:
         """Automatically detect and update the currently open HWP document filename. Display as plain text only."""
-        import subprocess
         import platform
         import os
-        def get_current_hwp_filename():
-            process_names = ["Hancom Office HWP", "한글", "HWP", "Hwp", "hwp"]
-            found = False
-            for proc in process_names:
-                print(f"[DEBUG] Trying process name for HWP: '{proc}'")
-                script = f'''
-                tell application "System Events"
-    tell application process "Hancom Office HWP"
-        get name of front window
-    end tell
-end tell
-
-                tell application "System Events"
-                    tell process "Hancom Office HWP"
-                        if (count of windows) > 0 then
-                            set windowTitle to name of front window
-                            return windowTitle
-                        else
-                            return ""
-                        end if
-                    end tell
-                end tell
-                '''
-                try:
-                    result = subprocess.run([
-                        "osascript", "-e", script
-                    ], capture_output=True, text=True)
-                    print(f"[DEBUG] osascript ({proc}) stdout: {result.stdout.strip()}")
-                    print(f"[DEBUG] osascript ({proc}) stderr: {result.stderr.strip()}")
-                    hwp_title = result.stdout.strip()
-                    if hwp_title:
-                        print(f"[DEBUG] Found HWP window title with process '{proc}': {hwp_title}")
-                        found = True
-                        return hwp_title
-                except Exception as e:
-                    print(f"[DEBUG] Exception running osascript for process {proc}: {e}")
-            if not found:
-                print(f"[DEBUG] None of the process names matched a running HWP instance: {process_names}")
-            return None
-
+        filename = None
         try:
-            filename = None
             if hasattr(self, "selected_files"):
                 print(f"[DEBUG] self.selected_files: {self.selected_files}")
                 if not self.selected_files:
-                    if platform.system() == "Darwin":
-                        hwp_title = get_current_hwp_filename()
-                        if hwp_title:
-                            filename = hwp_title
-                            print(f"[DEBUG] macOS HWP window title: {filename}")
-                        else:
-                            print("[DEBUG] No HWP window title detected from osascript.")
+                    system = platform.system()
+                    if system == "Windows":
+                        try:
+                            import win32com.client
+                            hwp = win32com.client.Dispatch("HWPFrame.HwpObject")
+                            full_path = hwp.Path
+                            filename = full_path.split("\\")[-1]
+                            print(f"[DEBUG] Windows HWP full path: {full_path}")
+                            print(f"[DEBUG] Windows HWP file name: {filename}")
+                        except Exception as e:
+                            print(f"[DEBUG] Exception in Windows HWP COM: {e}")
+                    elif system == "Darwin":
+                        import subprocess
+                        script = '''
+                        tell application "System Events"
+                            tell application process "Hancom Office HWP"
+                                get name of front window
+                            end tell
+                        end tell
+                        '''
+                        try:
+                            result = subprocess.run([
+                                "osascript", "-e", script
+                            ], capture_output=True, text=True)
+                            hwp_title = result.stdout.strip()
+                            if hwp_title:
+                                filename = hwp_title
+                                print(f"[DEBUG] macOS HWP window title: {filename}")
+                        except Exception as e:
+                            print(f"[DEBUG] Exception running osascript: {e}")
                 else:
                     # Prefer .hwp/.hwpx, but fallback to first file if present
                     for f in self.selected_files:
@@ -643,7 +625,6 @@ end tell
                 last_filename = getattr(self, '_last_hwp_filename', None)
                 if last_filename:
                     filename = last_filename
-                    print(f"[DEBUG] Fallback to _last_hwp_filename: {filename}")
                 else:
                     filename = "한글 문서"
                     print("[DEBUG] Fallback to default: 한글 문서")
@@ -654,8 +635,6 @@ end tell
             print(f"[DEBUG] Exception in _update_hwp_filename: {e}")
             self.hwp_filename_label.setText("한글 문서")
             self._last_hwp_filename = "한글 문서"
-        except Exception:
-            pass
 
     def _persist_chats(self) -> None:
         """Persist the in-memory chat store to a file under the user's home dir.
@@ -6928,7 +6907,6 @@ end tell
                 last_filename = getattr(self, '_last_hwp_filename', None)
                 if last_filename:
                     filename = last_filename
-                    print(f"[DEBUG] Fallback to _last_hwp_filename: {filename}")
                 else:
                     filename = ""
                     print("[DEBUG] Fallback to default: ")
@@ -7143,4 +7121,3 @@ def _apply_app_font(app: QApplication) -> None:
 def _ensure_material_icon_font() -> str:
     """Delegate material icon font resolution to gui.design.ensure_material_icon_font."""
     return design.ensure_material_icon_font()
-
