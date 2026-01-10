@@ -457,10 +457,6 @@ QScrollBar::sub-page:horizontal {
     background-color: transparent;
 }
 
-QLabel#hwp-filename-label {
-    background: transparent !important;
-    background-color: transparent !important;
-}
 
 /* Remove border from model selection parent */
 QWidget#model-dropdown, QFrame#model-dropdown {
@@ -481,3 +477,5 @@ QWidget.model-item, QLabel.model-item, QPushButton.model-item {
     color: #222;
 }
 
+=======
+>>>>>>> parent of 6baf929 (Add hwp file recognition feature)

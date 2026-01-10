@@ -157,11 +157,11 @@ QPushButton#help-button:pressed {
 }
 
 #input-container {
-    background-color: #000000;
+    /* background-color removed for transparency */
 }
 
 #script-input-container {
-    background-color: #1a1a1a;
+    /* background-color removed for transparency */
     border: 1px solid #4a4a4a;
     border-radius: 12px;
 }
