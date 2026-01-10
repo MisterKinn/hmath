@@ -6,6 +6,7 @@ import platform
 from pathlib import Path
 from typing import Optional
 import uuid
+from functools import partial
 import time
 
 # Optional speech recognition
@@ -50,13 +51,13 @@ from backend.backup_manager import BackupManager
 
 class FileDropTextEdit(QTextEdit):
     """Custom QTextEdit that forwards file drops to parent window instead of inserting file paths."""
-    
+
     file_dropped = Signal(str)  # Signal to emit when file is dropped
-    
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setAcceptDrops(True)
-    
+
     def dragEnterEvent(self, event):
         """Accept file drops but don't process them here."""
         if event.mimeData().hasUrls():
@@ -68,14 +69,14 @@ class FileDropTextEdit(QTextEdit):
                     return
         # For non-file drops (like text), use default behavior
         super().dragEnterEvent(event)
-    
+
     def dragMoveEvent(self, event):
         """Accept drag move for files."""
         if event.mimeData().hasUrls():
             event.acceptProposedAction()
         else:
             super().dragMoveEvent(event)
-    
+
     def dropEvent(self, event):
         """Handle file drops by forwarding to parent, not inserting paths."""
         if event.mimeData().hasUrls():
@@ -95,47 +96,47 @@ class AIWorker(QObject):
     finished = Signal(str)  # Emits the generated/optimized script
     error = Signal(str)  # Emits error message
     thought = Signal(str)  # Emits thought process updates
-    
+
     def __init__(self, ai_helper, task_type: str, **kwargs):
         super().__init__()
         self.ai_helper = ai_helper  # Can be ChatGPTHelper or MultiModelAIHelper
         self.task_type = task_type
         self.kwargs = kwargs
-    
+
     def run(self):
         """Run the AI task."""
         import traceback
         from pathlib import Path
         try:
             print(f"[AIWorker] Starting {self.task_type} task...")
-            
+
             def on_thought(message: str):
                 print(f"[AIWorker] Thought: {message}")
                 self.thought.emit(message)
-            
+
             # Get model parameter
             model = self.kwargs.get('model', 'auto')
-            
+
             if self.task_type == "generate":
                 print(f"[AIWorker] Calling generate_script with model: {model}...")
-                
+
                 # Check if we have multiple images to process
                 image_paths = self.kwargs.get('image_paths', [])
                 image_path = self.kwargs.get('image_path')  # Single image (legacy)
-                
+
                 if image_paths and len(image_paths) > 1:
                     # Process multiple images
                     print(f"[AIWorker] Processing {len(image_paths)} images")
                     all_results = []
-                    
+
                     for idx, img_path in enumerate(image_paths, 1):
                         on_thought(f"파일 {idx}/{len(image_paths)} 분석 중: {Path(img_path).name}")
-                        
+
                         desc = self.kwargs['description']
                         if idx > 1:
                             # For subsequent images, modify description
                             desc = f"다음 파일을 분석합니다 (파일 {idx}/{len(image_paths)})"
-                        
+
                         result = self.ai_helper.generate_script(
                             desc,
                             self.kwargs.get('context', ''),
@@ -143,13 +144,13 @@ class AIWorker(QObject):
                             on_thought=on_thought,
                             model=model
                         )
-                        
+
                         if result:
                             all_results.append(result)
                             print(f"[AIWorker] File {idx} processed: {len(result)} chars")
                         else:
                             print(f"[AIWorker] WARNING: File {idx} returned no result")
-                    
+
                     # Combine all results with paragraph separators
                     if all_results:
                         # Extract CODE sections and combine
@@ -161,7 +162,7 @@ class AIWorker(QObject):
                             if match:
                                 code = match.group(1).strip()
                                 combined_code.append(code)
-                        
+
                         # Create combined result
                         code_with_separators = '\ninsert_paragraph()\ninsert_paragraph()\n'.join(combined_code)
                         result = f"[DESCRIPTION]\n모든 파일을 분석하여 내용을 추출했습니다.\n[/DESCRIPTION]\n\n[CODE]\n{code_with_separators}\n[/CODE]"
@@ -176,7 +177,7 @@ class AIWorker(QObject):
                         on_thought=on_thought,
                         model=model
                     )
-                
+
                 print(f"[AIWorker] Generate result: {len(result) if result else 0} chars")
             elif self.task_type == "optimize":
                 print(f"[AIWorker] Calling optimize_script with model: {model}...")
@@ -192,7 +193,7 @@ class AIWorker(QObject):
                 print(f"[AIWorker] ERROR: {error_msg}")
                 self.error.emit(error_msg)
                 return
-            
+
             if result:
                 print(f"[AIWorker] Success! Emitting finished signal")
                 self.finished.emit(result)
@@ -332,10 +333,27 @@ class ScriptWorker(QThread):
 
 
 class MainWindow(QMainWindow):
+
+    def _snapshot_current_chat(self):
+        """Placeholder for missing method to prevent attribute errors."""
+        pass
+
+    def update_send_btn_icon(self):
+        """Update the send button icon for the current theme."""
+        from pathlib import Path
+        assets_dir = Path(__file__).resolve().parents[1] / "public" / "img"
+        if getattr(self, 'dark_mode', False):
+            icon_path = assets_dir / "send-dark.svg"
+        else:
+            icon_path = assets_dir / "send-light.svg"
+        self.send_btn.setIcon(QIcon(str(icon_path)))
+        self.send_btn.setIconSize(QSize(28, 28))
+
     def _handle_file_drop_in_input(self, files):
         """Handle files dropped into the script_edit input area. Stub implementation."""
         print(f"[DEBUG] Files dropped in input: {files}")
         # TODO: Implement actual file handling logic if needed
+
     def _export_chats(self) -> None:
         """Export all chats to a JSON file with enhanced dialog design."""
         from PySide6.QtWidgets import QFileDialog, QDialog, QVBoxLayout, QLabel, QPushButton
@@ -469,11 +487,11 @@ class MainWindow(QMainWindow):
         self.resize(420, 920)
         self.setMinimumWidth(320)
         self.setMinimumHeight(700)
-        self._worker: Optional[ScriptWorker] = None
-        self.sr_worker: Optional[SpeechRecognitionWorker] = None
+        self._worker = None  # type: Optional[ScriptWorker]
+        self.sr_worker = None  # type: Optional[SpeechRecognitionWorker]
         # AI thread management - support multiple concurrent threads
-        self.ai_threads: list[QThread] = []  # List of active AI threads
-        self.ai_workers: list[AIWorker] = []  # List of active AI workers
+        self.ai_threads = []  # type: list[QThread]  # List of active AI threads
+        self.ai_workers = []  # type: list[AIWorker]  # List of active AI workers
         # Default to light theme (pure white background)
         self.dark_mode = False
         self.chatgpt = ChatGPTHelper()  # Legacy support
@@ -495,8 +513,8 @@ class MainWindow(QMainWindow):
         self._persist_timer.setSingleShot(True)
         self._persist_timer.timeout.connect(lambda: self._persist_chats())
         # Drawer in-panel popup (used for profile/backup menus)
-        self._drawer_popup: QFrame | None = None
-        self.selected_files: list[str] = []  # Track selected files/images
+        self._drawer_popup = None  # type: QFrame | None
+        self.selected_files = []  # type: list[str]  # Track selected files/images
         self._last_hwp_filename = "한글 문서"  # Track last known HWP filename
         self._hwp_detection_timer = QTimer()
         self._hwp_detection_timer.timeout.connect(self._update_hwp_filename)
@@ -506,14 +524,14 @@ class MainWindow(QMainWindow):
         self._progress_timer = QTimer()
         self._progress_timer.timeout.connect(self._animate_progress_fade)
         # Drawer animation object (persisted to avoid GC & make single-click reliable)
-        self._drawer_anim: QPropertyAnimation | None = None
-        
+        self._drawer_anim = None  # type: QPropertyAnimation | None
+
         # Set application-wide font to Pretendard
         app_font = QFont("Pretendard")
         app_font.setPointSize(14)
         app_font.setWeight(QFont.Weight.Normal)  # Use Normal (400) for slightly thin, or QFont.Weight.Light for thinner
         self.setFont(app_font)
-        
+
         self._build_ui()
         self._apply_styles()
         # Load persisted state (e.g., selected model) from disk and apply
@@ -530,10 +548,10 @@ class MainWindow(QMainWindow):
         # Apply responsive UI tweaks immediately and on resize
         self._apply_responsive_layout()
         self._hwp_detection_timer.start(500)  # Check every 500ms
-        
+
         # Enable drag and drop for images and PDFs
         self.setAcceptDrops(True)
-        
+
         # Check HWP status on startup (delayed to let window show first)
         QTimer.singleShot(500, self._check_hwp_on_startup)
 
@@ -579,7 +597,7 @@ class MainWindow(QMainWindow):
                     system = platform.system()
                     if system == "Windows":
                         try:
-                            import win32com.client
+                            import win32com.client  # type: ignore[import-not-found]
                             hwp = win32com.client.Dispatch("HWPFrame.HwpObject")
                             full_path = hwp.Path
                             filename = full_path.split("\\")[-1]
@@ -669,19 +687,19 @@ class MainWindow(QMainWindow):
                 return
             import json
             data = json.loads(storage.read_text(encoding='utf-8'))
-            
+
             # Load chats if available
             if "chats" in data and isinstance(data["chats"], list):
                 self._chats = data["chats"]
                 print(f"[Persist] ✅ Loaded {len(self._chats)} chats from storage")
             else:
                 print("[Persist] No chats found in storage file")
-            
+
             # Load current chat ID
             if "current" in data:
                 self._current_chat_id = data["current"]
                 print(f"[Persist] Current chat ID: {self._current_chat_id}")
-            
+
             # Try a couple of places for the model so we remain tolerant to schema changes
             model = data.get("model") or (data.get("settings") or {}).get("model")
             if model:
@@ -728,7 +746,7 @@ class MainWindow(QMainWindow):
                     widget.deleteLater()
             # Apply filter
             # No longer seeding placeholder chats - we handle empty state with _ensure_default_chat
-            
+
             chats = [c for c in self._chats if (self._chat_filter.lower() in (c.get("title", "").lower()))]
             for chat in chats:
                 item_wrap = QWidget()
@@ -807,7 +825,7 @@ class MainWindow(QMainWindow):
                         self._set_drawer_item_icon(edit_btn, "edit_square", fallback="✎", px=16)
                     except Exception:
                         edit_btn.setText("✎")
-                edit_btn.clicked.connect(lambda checked=False, cid=chat.get("id"): self._rename_chat(cid))
+                edit_btn.clicked.connect(partial(self._rename_chat, chat.get("id")))
                 try:
                     edit_btn.hide()
                 except Exception:
@@ -837,7 +855,7 @@ class MainWindow(QMainWindow):
                         del_btn.setIconSize(QSize(16, 16))
                 except Exception:
                     del_btn.setText("✕")
-                del_btn.clicked.connect(lambda checked=False, cid=chat.get("id"): self._delete_chat(cid))
+                del_btn.clicked.connect(partial(self._delete_chat, chat.get("id")))
                 # Start hidden; reveal on hover of the entire chat row
                 try:
                     del_btn.hide()
@@ -1180,14 +1198,14 @@ class MainWindow(QMainWindow):
                 elif item.spacerItem():
                     # Don't delete spacer items, just remove them
                     pass
-            
+
             # Clear chat widgets list
             self._chat_widgets.clear()
-            
+
             # Clear thinking widget reference if present
             if self._thinking_widget:
                 self._thinking_widget = None
-            
+
             # Re-add stretch
             self.chat_transcript_layout.addStretch(1)
             print("[MainWindow] Chat transcript cleared")
@@ -1270,12 +1288,14 @@ class MainWindow(QMainWindow):
     def _apply_button_icon(
         self,
         button,
-        icon_key: str,
-        fallback_text: str,
-        icon_size: QSize = QSize(22, 22),
-        preserve_text: bool = False,
-    ) -> None:
+        icon_key,
+        fallback_text,
+        icon_size=None,
+        preserve_text=False,
+    ):
         """Set an icon on a button if the asset exists, otherwise fall back to text."""
+        if icon_size is None:
+            icon_size = QSize(22, 22)
         icon_path = self._get_icon_path(icon_key)
         button.setIcon(QIcon())
         if icon_path:
@@ -1289,12 +1309,14 @@ class MainWindow(QMainWindow):
     def _apply_button_icon_themed(
         self,
         button,
-        icon_key: str,
-        fallback_text: str,
-        icon_size: QSize = QSize(22, 22),
-        preserve_text: bool = False,
-    ) -> None:
+        icon_key,
+        fallback_text,
+        icon_size=None,
+        preserve_text=False,
+    ):
         """Set a theme-aware icon on a button."""
+        if icon_size is None:
+            icon_size = QSize(22, 22)
         icon_path = self._get_icon_path(icon_key, use_theme=True)
         # Special-case: prefer specific light-themed assets for some icons regardless of current theme
         if not icon_path and icon_key in ("light", "settings"):
@@ -1456,7 +1478,7 @@ class MainWindow(QMainWindow):
         main_column = QVBoxLayout(main_area)
         main_column.setContentsMargins(0, 0, 0, 0)
         main_column.setSpacing(0)
-        
+
         # Header area (title, help buttons, templates)
         self.header_area = QWidget()
         # Allow targeted styling and transparency for the top navbar
@@ -1468,17 +1490,17 @@ class MainWindow(QMainWindow):
         header_layout = QVBoxLayout(self.header_area)
         header_layout.setContentsMargins(40, 40, 40, 0)
         header_layout.setSpacing(20)
-        
+
         header_layout.addWidget(self._build_header())
         header_layout.addWidget(self._build_templates(), 0)  # No stretch
-        
+
         # Output area (conversation/chat display)
         self.output_area = QWidget()
         self.output_area.setObjectName("output-container")
         output_layout = QVBoxLayout(self.output_area)
         output_layout.setContentsMargins(40, 20, 40, 20)
         output_layout.setSpacing(16)
-        
+
         # ChatGPT-style transcript (shown above the input when the user asks AI)
         self.chat_scroll = QScrollArea()
         self.chat_scroll.setObjectName("chat-scroll")
@@ -1508,7 +1530,7 @@ class MainWindow(QMainWindow):
         self.log_output.customContextMenuRequested.connect(self._show_log_context_menu)
         self.log_output.hide()
         output_layout.addWidget(self.log_output, 0)
-        
+
         # Input area at bottom (fixed)
         input_area = QWidget()
         input_area.setObjectName("input-container")
@@ -1516,7 +1538,7 @@ class MainWindow(QMainWindow):
         # Keep the composer compact (shorter input form height).
         input_layout.setContentsMargins(20, 0, 20, 16)
         input_layout.setSpacing(12)
-        
+
         # Image preview area (initially hidden)
         self.image_preview_container = QWidget()
         self.image_preview_container.setObjectName("image-preview-container")
@@ -1526,14 +1548,14 @@ class MainWindow(QMainWindow):
         self.image_preview_layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
         self.image_preview_container.hide()
         input_layout.addWidget(self.image_preview_container)
-        
+
         # Script editor container with buttons inside
         script_container = QWidget()
         script_container.setObjectName("script-input-container")
         script_layout = QVBoxLayout(script_container)
         script_layout.setContentsMargins(16, 16, 16, 16)
         script_layout.setSpacing(12)
-        
+
         # Natural language input field (changed from code editor to chat-like input)
         self.script_edit = FileDropTextEdit()
         self.script_edit.setObjectName("script-editor")
@@ -1547,7 +1569,7 @@ class MainWindow(QMainWindow):
         # Custom context menu in Korean
         self.script_edit.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.script_edit.customContextMenuRequested.connect(self._show_editor_context_menu)
-        
+
         # Override keyPressEvent for Enter/Shift+Enter handling
         original_key_press = self.script_edit.keyPressEvent
         def custom_key_press(event):
@@ -1566,16 +1588,16 @@ class MainWindow(QMainWindow):
             else:
                 # Other keys: default behavior
                 original_key_press(event)
-        
+
         self.script_edit.keyPressEvent = custom_key_press  # type: ignore[method-assign]
-        
+
         script_layout.addWidget(self.script_edit)
-        
+
         # Bottom row with '+' button for files/images, AI selector, and Run button
         bottom_row = QHBoxLayout()
         bottom_row.setContentsMargins(0, 0, 0, 0)
         bottom_row.setSpacing(12)
-        
+
         # (Removed) add_file_btn: the circular plus upload button was removed per UX request.
 
         # Small plus button to the left of the HWP pill (theme-aware asset: plus.png / plus-dark.png)
@@ -1594,13 +1616,18 @@ class MainWindow(QMainWindow):
                     candidate = alt
                 else:
                     candidate = None
+            icon_size = QSize(36, 36)
             if candidate is not None:
                 self.hwp_add_btn.setIcon(QIcon(str(candidate)))
-                self.hwp_add_btn.setIconSize(QSize(28, 28))
             else:
-                self._apply_button_icon(self.hwp_add_btn, "add", "+", QSize(28, 28))
+                self._apply_button_icon(self.hwp_add_btn, "add", "+", icon_size)
+            self.hwp_add_btn.setIconSize(icon_size)
+            self.hwp_add_btn.setStyleSheet(f"QPushButton#hwp-add-button {{ background-color: transparent; border: none; border-radius: 8px; qproperty-iconSize: {icon_size.width()}px {icon_size.height()}px; }}")
         except Exception:
-            self._apply_button_icon(self.hwp_add_btn, "add", "+", QSize(28, 28))
+            icon_size = QSize(36, 36)
+            self._apply_button_icon(self.hwp_add_btn, "add", "+", icon_size)
+            self.hwp_add_btn.setIconSize(icon_size)
+            self.hwp_add_btn.setStyleSheet(f"QPushButton#hwp-add-button {{ background-color: transparent; border: none; border-radius: 8px; qproperty-iconSize: {icon_size.width()}px {icon_size.height()}px; }}")
         self.hwp_add_btn.clicked.connect(self._handle_add_file)
         bottom_row.addWidget(self.hwp_add_btn)
 
@@ -1609,20 +1636,14 @@ class MainWindow(QMainWindow):
         self.hwp_filename_label.setObjectName("hwp-filename-label")
         self.hwp_filename_label.setMinimumWidth(120)
         self.hwp_filename_label.setMinimumHeight(32)
-        self.hwp_filename_label.setStyleSheet(
-            """
-            QLabel#hwp-filename-label {
-                background: transparent;
-                color: #111;
-                font-size: 16px;
-                font-weight: 600;
-                padding: 8px 16px;
-                border: none;
-                border-radius: 4px;
-                margin-left: -15px;
-            }
-            """
-        )
+        if getattr(self, 'dark_mode', False):
+            self.hwp_filename_label.setStyleSheet(
+                "QLabel#hwp-filename-label { background: transparent; color: #fff !important; font-size: 16px; font-weight: 600; padding: 8px 16px; border: none; border-radius: 4px; margin-left: -15px; }"
+            )
+        else:
+            self.hwp_filename_label.setStyleSheet(
+                "QLabel#hwp-filename-label { background: transparent; color: #111; font-size: 16px; font-weight: 600; padding: 8px 16px; border: none; border-radius: 4px; margin-left: -15px; }"
+            )
         bottom_row.addWidget(self.hwp_filename_label)
 
         # AI selector button
@@ -1660,7 +1681,7 @@ class MainWindow(QMainWindow):
                         self.top_model_display.setText(self._current_model)
                 except Exception:
                     pass
-        
+
         bottom_row.addStretch()
         # HWP pill already added near the upload button
 
@@ -1682,7 +1703,7 @@ class MainWindow(QMainWindow):
             self.mic_btn.hide()
         except Exception:
             pass
-        
+
         # Right side: Send button (circular)
         # Add new send button from scratch, next to upload icon
         self.send_btn = QPushButton()
@@ -1695,19 +1716,21 @@ class MainWindow(QMainWindow):
         def set_send_icon():
             from pathlib import Path
             assets_dir = Path(__file__).resolve().parents[1] / "public" / "img"
-            icon_path = assets_dir / ("send-dark.svg" if getattr(self, 'dark_mode', False) else "send-light.svg")
-            if not icon_path.exists():
-                icon_path = assets_dir / ("send-light.svg" if getattr(self, 'dark_mode', False) else "send-dark.svg")
+            if getattr(self, 'dark_mode', False):
+                icon_path = assets_dir / "send-dark.svg"
+            else:
+                icon_path = assets_dir / "send-light.svg"
             self.send_btn.setIcon(QIcon(str(icon_path)))
             self.send_btn.setIconSize(QSize(28, 28))
         set_send_icon()
         self.send_btn.clicked.connect(self._handle_run_clicked)
         bottom_row.addWidget(self.send_btn)
         self._set_send_icon = set_send_icon  # Allow theme toggling to update icon
+        self.update_send_btn_icon = self.update_send_btn_icon  # For external theme toggling
         # Send button removed as requested. Only upload icon remains.
-        
+
         script_layout.addLayout(bottom_row)
-        
+
         input_layout.addWidget(script_container)
 
         # Add areas to main column with proper spacing
@@ -1883,7 +1906,7 @@ class MainWindow(QMainWindow):
         # Chat transcript state
         self._chat_widgets: list[tuple[str, QWidget, QLabel]] = []  # (role, row_widget, bubble_label)
         self._thinking_widget: tuple[QWidget, QLabel] | None = None  # (row_widget, bubble_label)
-        self._thinking_timer: QTimer | None = None
+        self._thinking_timer = None  # type: QTimer | None
         self._thinking_dots = 0
         self._auto_execute_mode = False  # Flag to auto-execute generated code without showing it
 
@@ -1893,31 +1916,31 @@ class MainWindow(QMainWindow):
         lyt = QVBoxLayout(frame)
         lyt.setSpacing(8)
         lyt.setContentsMargins(0, 0, 0, 0)
-        
+
         # Title with logo
         title_container = QWidget()
         title_layout = QHBoxLayout(title_container)
         title_layout.setContentsMargins(0, 0, 0, 0)
         title_layout.setSpacing(12)
         title_layout.addStretch()
-        
+
         # Logo
         self.logo_label = QLabel()
         self.logo_label.setObjectName("app-logo")
         self.logo_label.setStyleSheet("font-size: 36px; color: #5377f6;")
         self._set_app_logo()
         title_layout.addWidget(self.logo_label)
-        
+
         # Title text
         title = QLabel("Nova AI")
         title.setObjectName("app-title")
         title_layout.addWidget(title)
-        
+
         title_layout.addStretch()
-        
+
         subtitle = QLabel("최고의 한글 수식 자동화 에이전트")
         subtitle.setObjectName("app-subtitle")
-        
+
         lyt.addWidget(title_container, alignment=Qt.AlignmentFlag.AlignCenter)
         lyt.addWidget(subtitle, alignment=Qt.AlignmentFlag.AlignCenter)
         return frame
@@ -1928,7 +1951,7 @@ class MainWindow(QMainWindow):
         layout = QHBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
-        
+
         self.howto_button = QPushButton("도움말")
         self.howto_button.setObjectName("help-button")
         self.howto_button.setFixedHeight(34)
@@ -1938,7 +1961,7 @@ class MainWindow(QMainWindow):
         self.howto_button.setText("도움말")
         self._apply_button_icon(self.howto_button, "help", "[?]", QSize(18, 18), preserve_text=True)
         layout.addWidget(self.howto_button)
-        
+
         self.latex_button = QPushButton("</> LaTeX")
         self.latex_button.setObjectName("help-button")
         self.latex_button.setFixedHeight(34)
@@ -1946,7 +1969,7 @@ class MainWindow(QMainWindow):
         self.latex_button.setToolTip("LaTeX 수식 문법 가이드를 제공합니다")
         self.latex_button.clicked.connect(self._show_latex_helper)
         layout.addWidget(self.latex_button)
-        
+
         self.ai_generate_button = QPushButton("AI 생성")
         self.ai_generate_button.setObjectName("help-button")
         self.ai_generate_button.setFixedHeight(34)
@@ -1968,23 +1991,23 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
-        
+
         # Center the grid
         grid_container = QWidget()
         grid_layout = QVBoxLayout(grid_container)
         grid_layout.setContentsMargins(0, 0, 0, 0)
-        
+
         # Create a horizontal layout for the grid
         h_grid = QHBoxLayout()
         h_grid.setContentsMargins(0, 0, 0, 0)
         h_grid.setSpacing(12)
         h_grid.addStretch()
-        
+
         self.template_buttons: list[tuple[QPushButton, dict]] = []
         for name, template in TEMPLATES.items():
             icon_key = template.get("icon_key", "")
             fallback = template.get("fallback", name[0])
-            
+
             if icon_key:
                 btn = QPushButton()
                 btn.setObjectName("template-btn")
@@ -2005,18 +2028,18 @@ class MainWindow(QMainWindow):
                 btn.setMinimumHeight(44)
                 btn.clicked.connect(lambda checked, code=template["code"]: self._load_template(code))
                 btn.setStyleSheet("text-align: right; padding-right: 12px;")
-            
+
             template["label"] = name
             template["fallback_display"] = fallback
             self.template_buttons.append((btn, template))
             h_grid.addWidget(btn)
-        
+
         h_grid.addStretch()
         grid_layout.addLayout(h_grid)
-        
+
         layout.addWidget(grid_container)
         layout.addStretch()
-        
+
         return container
 
     def _load_template(self, code: str) -> None:
@@ -2030,11 +2053,11 @@ class MainWindow(QMainWindow):
         original_style = widget.styleSheet()
         widget.setStyleSheet(original_style + "\nborder-color: #5377f6 !important;")
         timer = QTimer()
-        
+
         def reset():
             widget.setStyleSheet(original_style)
             timer.stop()
-        
+
         timer.timeout.connect(reset)
         timer.start(600)
 
@@ -2407,11 +2430,11 @@ class MainWindow(QMainWindow):
 
     def _set_drawer_open(self, open_: bool, animate: bool = True) -> None:
         self._drawer_open = open_
-        
+
         # Render chat list when opening drawer to show latest state
         if open_:
             self._render_chat_list()
-        
+
         self._apply_drawer_state(animate=animate)
         if not open_:
             # hide any popups when closing the drawer
@@ -2422,7 +2445,7 @@ class MainWindow(QMainWindow):
 
         Behavior:
         - If a mouse press occurs and the profile popup is visible, and the click is inside the drawer
-          but outside the popup, hide the popup and allow the event to continue (do not swallow it).
+            but outside the popup, hide the popup and allow the event to continue (do not swallow it).
         """
         try:
             from PySide6.QtCore import QEvent
@@ -2658,6 +2681,8 @@ class MainWindow(QMainWindow):
             override += "\nQWidget, QLabel, QTextEdit { color: #000000; }\n"
             # Ensure profile popup rows have consistent sizing across themes
             override += "\nQFrame#profile-popup QPushButton#profile-popup-action { font-size: 15px; padding: 6px 8px; font-weight:700; }\nQWidget#profile-popup-row { padding: 0px; }\nQCheckBox { min-width: 40px; min-height: 24px; }\n"
+            # HWP filename label: black in light mode
+            override += "\nQLabel#hwp-filename-label { color: #111 !important; }\n"
         else:
             # Dark mode colors
             override = "\nQWidget#main-area { background-color: #000000; color: #ffffff; }\nQWidget#central { background-color: #000000; color: #ffffff; }\nQMainWindow { background-color: #000000; color: #ffffff; }\n"
@@ -2665,6 +2690,8 @@ class MainWindow(QMainWindow):
             override += "\nQWidget, QLabel, QTextEdit { color: #e8e8e8; }\n"
             override += "\nQLabel#drawer-user-name { color: #ffffff !important; }\n"
             override += "\nQFrame#profile-popup { background: #111111; color: #ffffff; }\nQFrame#profile-popup QPushButton#profile-popup-action { font-size: 15px; padding: 6px 8px; font-weight:700; color: #ffffff; }\nQFrame#profile-popup QLabel { color: #ffffff; }\nQWidget#profile-popup-row { padding: 0px; }\nQCheckBox { min-width: 40px; min-height: 24px; }\n"
+            # HWP filename label: white in dark mode
+            override += "\nQLabel#hwp-filename-label { color: #fff !important; }\n"
 
         self.setStyleSheet(theme_qss + override)
         # Re-apply distinct styling for help buttons after loading theme
@@ -2686,6 +2713,11 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         # Additional adaptive styling to match simplified layout
+        # Ensure send button icon updates after theme change
+        try:
+            self.update_send_btn_icon()
+        except Exception:
+            pass
         try:
             # Make heading large and centered
             if hasattr(self, "center_prompt"):
@@ -3002,7 +3034,7 @@ class MainWindow(QMainWindow):
             logo_paths = [
                 assets_dir / "formulite_logo.png"
             ]
-            
+
             logo_loaded = False
             for logo_path in logo_paths:
                 if logo_path.exists():
@@ -3011,7 +3043,7 @@ class MainWindow(QMainWindow):
                     self.logo_label.setText("")
                     logo_loaded = True
                     break
-            
+
             if not logo_loaded:
                 self.logo_label.setPixmap(QPixmap())
                 self.logo_label.setText("[∑]")
@@ -3312,7 +3344,7 @@ class MainWindow(QMainWindow):
                 fallback = template.get("fallback_display", btn.text()[:1])
                 label = template.get("label", "")
                 use_theme = template.get("use_theme", False)
-                
+
                 if icon_key:
                     btn.setText(label)
                     if use_theme:
@@ -3556,14 +3588,14 @@ class MainWindow(QMainWindow):
                 preview_container = QFrame()
                 preview_container.setObjectName("image-preview-item")
                 preview_container.setFixedSize(130, 155)  # Fixed size container
-                
+
                 # Use absolute positioning for overlaying close button
                 preview_container.setStyleSheet("""
                     QFrame#image-preview-item {
                         background-color: transparent;
                     }
                 """)
-                
+
                 # Create image label
                 preview_label = QLabel(preview_container)
                 scaled = pixmap.scaled(120, 120, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
@@ -3577,7 +3609,7 @@ class MainWindow(QMainWindow):
                     background-color: white;
                 """)
                 preview_label.move(5, 0)
-                
+
                 # Create filename label
                 filename = Path(file_path).name
                 if len(filename) > 15:
@@ -3591,7 +3623,7 @@ class MainWindow(QMainWindow):
                 """)
                 filename_label.setFixedWidth(120)
                 filename_label.move(5, 125)
-                
+
                 # Create remove button at top-right corner (overlaid)
                 remove_btn = QPushButton("✕", preview_container)
                 remove_btn.setFixedSize(20, 20)
@@ -3614,15 +3646,15 @@ class MainWindow(QMainWindow):
                 # Position at top-right corner of the image (moved higher)
                 remove_btn.move(107, -1)
                 remove_btn.raise_()  # Bring to front
-                
+
                 # Store file path as property for later removal
                 preview_container.setProperty("file_path", file_path)
-                
+
                 self.image_preview_layout.addWidget(preview_container, alignment=Qt.AlignmentFlag.AlignLeft)
                 self.image_preview_container.show()
         except Exception as e:
             print(f"Error adding image preview: {e}")
-    
+
     def _remove_image_preview(self, file_path: str, preview_widget: QWidget) -> None:
         """Remove an image preview and its associated file from selected_files."""
         try:
@@ -3630,11 +3662,11 @@ class MainWindow(QMainWindow):
             if file_path in self.selected_files:
                 self.selected_files.remove(file_path)
                 print(f"[MainWindow] File removed: {file_path}")
-            
+
             # Remove the preview widget
             self.image_preview_layout.removeWidget(preview_widget)
             preview_widget.deleteLater()
-            
+
             # Hide container if no more previews
             if len(self.selected_files) == 0:
                 self.image_preview_container.hide()
@@ -3723,28 +3755,30 @@ class MainWindow(QMainWindow):
                 menu.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
             except Exception:
                 pass
+            # Directly set menu style to remove border and set background
+            # Forcefully remove all borders and shadows from the menu
+            # Remove all borders, outlines, and shadows from the menu
             menu.setStyleSheet(
                 f"""
                 QMenu {{
                     background-color: {menu_bg};
-                    border: 1px solid {menu_border};
+                    border: none !important;
                     border-radius: 8px;
                     padding: 6px;
+                    box-shadow: none !important;
+                    outline: none !important;
                 }}
                 QMenu QWidget {{
                     background-color: transparent;
-                }}
-                QMenu::item:selected {{
-                    background: {hover_bg};
                 }}
                 """
             )
 
             # Model families and human-friendly descriptions (cheapest vision-capable tiers)
             models = [
-                ("gpt-5-nano", "GPT (gpt-5-nano) — 전반적인 업무 능력이 좋고, 가장 저렴합니다."),
-                ("gemini-2.0-flash", "Gemini 2.0 Flash — 이미지 처리 능력이 좋고, 속도가 빠릅니다."),
-                ("claude-3-haiku-20240307", "Claude 3 Haiku — 수식 설명에 강하고, 창의적인 업무에 유용합니다."),
+                ("gpt-5-nano", "전반적인 업무 능력이 좋고, 가장 저렴합니다."),
+                ("gemini-2.0-flash", "이미지 처리 능력이 좋고, 속도가 빠릅니다."),
+                ("claude-3-haiku", "수식 설명에 강하고, 창의적인 업무에 유용합니다."),
             ]
 
             # Create rich menu rows using QWidgetAction
@@ -3765,12 +3799,12 @@ class MainWindow(QMainWindow):
                 row_layout.addLayout(v)
                 row_layout.addStretch()
 
-                # Highlight selected model row with background color
+                # Highlight selected model row with background color and remove border
                 if getattr(self, "_current_model", None) == m:
-                    highlight_bg = "#e8f0fe" if not getattr(self, "dark_mode", False) else "#1a2642"
-                    row.setStyleSheet(f"background-color: {highlight_bg}; border-radius: 8px;")
+                    highlight_bg = "#f5f5f5" if not getattr(self, "dark_mode", False) else "#1a1a1a"
+                    row.setStyleSheet(f"background-color: {highlight_bg}; border: none; border-radius: 8px;")
                 else:
-                    row.setStyleSheet("")
+                    row.setStyleSheet("background: transparent; border: none;")
 
                 act = QWidgetAction(menu)
                 act.setDefaultWidget(row)
@@ -4322,7 +4356,7 @@ class MainWindow(QMainWindow):
     def _show_account_popup(self) -> None:
         """Compatibility shim: show the profile menu (redirects to _show_profile_menu)."""
         self._show_profile_menu()
-    
+
     def _show_code_input_dialog(self) -> None:
         """Show code input dialog for advanced users who want to write Python code directly."""
         dialog = QDialog(self)
@@ -4330,7 +4364,7 @@ class MainWindow(QMainWindow):
         dialog.setModal(True)
         dialog.setMinimumSize(400, 400)
         dialog.resize(420, 420)
-        
+
         # Modern dialog styling with rounded corners and shadow effect
         bg_color = "#0f0f0f" if self.dark_mode else "#ffffff"
         border_color = "#2a2a2a" if self.dark_mode else "#e5e7eb"
@@ -4341,16 +4375,16 @@ class MainWindow(QMainWindow):
                 border-radius: 16px;
             }}
         """)
-        
+
         # Create main layout with better spacing
         main_layout = QVBoxLayout(dialog)
         main_layout.setContentsMargins(24, 28, 24, 20)
         main_layout.setSpacing(16)
-        
+
         # Header section with icon and title
         header_layout = QVBoxLayout()
         header_layout.setSpacing(8)
-        
+
         # Title with better typography
         title_label = QLabel("Python 코드 입력")
         title_label.setStyleSheet(f"""
@@ -4363,7 +4397,7 @@ class MainWindow(QMainWindow):
             }}
         """)
         header_layout.addWidget(title_label)
-        
+
         # Description with better styling
         desc_label = QLabel("한글 문서 자동화를 위한 Python 코드를 작성하세요.\n사용 가능한 함수는 LaTeX 가이드를 참고하세요.")
         desc_label.setWordWrap(True)
@@ -4378,20 +4412,20 @@ class MainWindow(QMainWindow):
         """)
         header_layout.addWidget(desc_label)
         main_layout.addLayout(header_layout)
-        
+
         # Code editor with modern styling
         code_editor = QTextEdit()
         code_editor.setObjectName("code-input-editor")
         code_editor.setPlaceholderText("# Python 코드를 입력하세요\n# 예: insert_text('Hello World')\n#     insert_paragraph()\n#     insert_equation('x^2 + y^2 = z^2')")
         code_editor.setPlainText("")
         code_editor.setMinimumHeight(240)
-        
+
         # Enhanced code editor styling
         editor_bg = "#1a1a1a" if self.dark_mode else "#f9fafb"
         editor_border = "#3a3a3a" if self.dark_mode else "#e5e7eb"
         editor_text = "#e5e7eb" if self.dark_mode else "#111827"
         editor_placeholder = "#6b7280" if self.dark_mode else "#9ca3af"
-        
+
         code_editor.setStyleSheet(f"""
             QTextEdit#code-input-editor {{
                 background-color: {editor_bg};
@@ -4413,26 +4447,26 @@ class MainWindow(QMainWindow):
                 color: {editor_placeholder};
             }}
         """)
-        
+
         main_layout.addWidget(code_editor, 1)  # Stretch factor
-        
+
         # Button row with improved styling
         button_row = QHBoxLayout()
         button_row.setSpacing(12)
         button_row.setContentsMargins(0, 8, 0, 0)
-        
+
         # LaTeX helper button with modern design
         latex_btn = QPushButton("LaTeX 가이드")
         latex_btn.setObjectName("latex-helper-button")
         latex_btn.setMinimumWidth(100)
         latex_btn.setMinimumHeight(44)
         latex_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        
+
         latex_bg = "#1f1f1f" if self.dark_mode else "#f3f4f6"
         latex_border = "#3a3a3a" if self.dark_mode else "#d1d5db"
         latex_text = "#e5e7eb" if self.dark_mode else "#374151"
         latex_hover = "#2a2a2a" if self.dark_mode else "#e5e7eb"
-        
+
         latex_btn.setStyleSheet(f"""
             QPushButton#latex-helper-button {{
                 background-color: {latex_bg};
@@ -4454,19 +4488,19 @@ class MainWindow(QMainWindow):
         """)
         latex_btn.clicked.connect(self._show_latex_helper)
         button_row.addWidget(latex_btn)
-        
+
         button_row.addStretch()
-        
+
         # Cancel button with refined styling
         cancel_btn = QPushButton("취소")
         cancel_btn.setObjectName("secondary-button")
         cancel_btn.setMinimumWidth(80)
         cancel_btn.setMinimumHeight(44)
         cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        
+
         cancel_text = "#9ca3af" if self.dark_mode else "#6b7280"
         cancel_hover = "#2a2a2a" if self.dark_mode else "#f3f4f6"
-        
+
         cancel_btn.setStyleSheet(f"""
             QPushButton#secondary-button {{
                 background-color: transparent;
@@ -4487,7 +4521,7 @@ class MainWindow(QMainWindow):
         """)
         cancel_btn.clicked.connect(dialog.reject)
         button_row.addWidget(cancel_btn)
-        
+
         # Run button with modern primary action styling
         run_btn = QPushButton("▶ 실행")
         run_btn.setObjectName("primary-action")
@@ -4512,37 +4546,37 @@ class MainWindow(QMainWindow):
                 background-color: #1d4ed8;
             }
         """)
-        
+
         def on_run():
             code = code_editor.toPlainText().strip()
             if not code:
                 self._show_info_dialog("알림", "코드를 입력해주세요.")
                 return
-            
+
             # Execute the code
             dialog.accept()
             self._execute_code_directly(code)
-        
+
         run_btn.clicked.connect(on_run)
         button_row.addWidget(run_btn)
-        
+
         main_layout.addLayout(button_row)
-        
+
         dialog.exec()
-    
+
     def _execute_code_directly(self, code: str) -> None:
         """Execute Python code directly without AI generation."""
         if self._worker and self._worker.isRunning():
             self._show_info_dialog("진행 중", "이미 작업을 실행 중입니다.")
             return
-        
+
         # Show execution message in chat
         try:
             self._chat_add_message("user", "코드 실행")
             self._chat_add_message("assistant", "코드를 실행하고 있습니다...")
         except Exception:
             pass
-        
+
         # Execute the code
         self._worker = ScriptWorker(code, self)
         self._worker.log_signal.connect(lambda msg: None)  # Suppress log messages
@@ -4554,7 +4588,7 @@ class MainWindow(QMainWindow):
         if hasattr(self, "ai_optimize_button"):
             self.ai_optimize_button.setEnabled(False)
         self._worker.start()
-    
+
     def _on_code_execution_finished(self) -> None:
         """Handle completion of code execution from code input dialog."""
         try:
@@ -4566,7 +4600,7 @@ class MainWindow(QMainWindow):
             self.ai_generate_button.setEnabled(True)
         if hasattr(self, "ai_optimize_button"):
             self.ai_optimize_button.setEnabled(True)
-    
+
     def _show_error_dialog(self, message: str) -> None:
         """Show elegant error dialog."""
         error_content = f"""
@@ -4640,7 +4674,7 @@ class MainWindow(QMainWindow):
         success = QLabel("")
         success.setObjectName("success-indicator")
         success.setStyleSheet("color: #5377f6; font-size: 28px;")
-        
+
         # Show briefly in the conversation area
         self._append_log("[V] 스크립트가 성공적으로 완료되었습니다!")
 
@@ -4698,16 +4732,16 @@ class MainWindow(QMainWindow):
         load_icon = self._get_icon_path_str("load") or ""
         light_icon = self._get_icon_path_str("light") or ""
         settings_icon = self._get_icon_path_str("settings") or ""
-        
+
         howto_content = f"""
 <style>
-  .functions {{ margin-top: 12px; }}
-  .func-item {{ display: flex; flex-direction: column; gap: 2px; margin-bottom: 10px; }}
-  .func-item code {{ background: #f3f4f6; color: #000000; padding: 6px 8px; border-radius: 8px; display: inline-block; }}
+    .functions {{ margin-top: 12px; }}
+    .func-item {{ display: flex; flex-direction: column; gap: 2px; margin-bottom: 10px; }}
+    .func-item code {{ background: #f3f4f6; color: #000000; padding: 6px 8px; border-radius: 8px; display: inline-block; }}
 
-  .dark-mode .func-item code {{ background: #1f2937; color: #e5e7eb; }}
-  .func-item small {{ color: #666; }}
-  .dark-mode .func-item small {{ color: #9ca3af; }}
+    .dark-mode .func-item code {{ background: #1f2937; color: #e5e7eb; }}
+    .func-item small {{ color: #666; }}
+    .dark-mode .func-item small {{ color: #9ca3af; }}
 </style>
 
 <h2>❓ HMATH AI 사용 가이드</h2>
@@ -4933,29 +4967,29 @@ class MainWindow(QMainWindow):
         """Append user input to log output with right alignment and speech balloon emoji."""
         cursor = self.log_output.textCursor()
         cursor.movePosition(cursor.MoveOperation.End)
-        
+
         # Add spacing if there's already content
         if self.log_output.toPlainText().strip():
             cursor.insertBlock()
-        
+
         # Create block format for right alignment
         block_format = cursor.blockFormat()
         block_format.setAlignment(Qt.AlignmentFlag.AlignRight)
         cursor.setBlockFormat(block_format)
-        
+
         # Set character format for user message
         char_format = cursor.charFormat()
         char_format.setForeground(QColor(100, 150, 200))
-        
+
         cursor.setCharFormat(char_format)
         # Add speech balloon emoji to the left of the text
         cursor.insertText(f"\n\n💬 {text}")
-        
+
         # Add newline for spacing
         cursor.insertBlock()
         block_format.setAlignment(Qt.AlignmentFlag.AlignLeft)
         cursor.setBlockFormat(block_format)
-        
+
         self.log_output.setTextCursor(cursor)
 
     def _ensure_chat_transcript_visible(self) -> None:
@@ -5117,7 +5151,7 @@ class MainWindow(QMainWindow):
         if self._progress_base_text != base_text:
             self._progress_base_text = base_text
             self._progress_fade_count = 0  # Reset fade animation
-            
+
             # If no progress started yet, add a new line
             if not self._progress_active:
                 self.log_output.append(base_text)
@@ -5130,7 +5164,7 @@ class MainWindow(QMainWindow):
                 if cursor.selectedText():
                     cursor.removeSelectedText()
                 self.log_output.append(base_text)
-            
+
             # Start fade animation (20 frames total: 10 fade-out, 10 fade-in)
             self._progress_timer.start(50)  # 50ms per frame = 500ms total transition
         else:
@@ -5142,17 +5176,17 @@ class MainWindow(QMainWindow):
         if not self._progress_active:
             self._progress_timer.stop()
             return
-        
+
         # Fade animation: frames 0-19 (total 20 frames)
         frame = self._progress_fade_count
         self._progress_fade_count = (self._progress_fade_count + 1) % 20
-        
+
         # Calculate opacity: fade out (0-9), then fade in (10-19)
         if frame < 10:  # Fade out: 1.0 to 0.0
             opacity = 1.0 - (frame / 10.0)
         else:  # Fade in: 0.0 to 1.0
             opacity = (frame - 10) / 10.0
-        
+
         # Cycling dots: . → .. → ... → (empty) → repeat (slower cycle with 8 states)
         # Hide dots when completion message appears
         if "생성 완료:" in self._progress_base_text or "최적화 완료:" in self._progress_base_text:
@@ -5167,28 +5201,28 @@ class MainWindow(QMainWindow):
                 dots = "..."  # 3 dots
             else:
                 dots = ""  # Empty
-        
+
         updated_text = f"{self._progress_base_text}{dots}"
-        
+
         # Interpolate color from dim (100) to normal (150)
         dim_gray = 100
         normal_gray = 150
         color_value = int(dim_gray + (normal_gray - dim_gray) * opacity)
-        
+
         # Apply the fade effect to the last line
         cursor = self.log_output.textCursor()
         cursor.movePosition(cursor.MoveOperation.End)
-        
+
         # Select entire last line
         cursor.select(cursor.SelectionType.LineUnderCursor)
         selected_text = cursor.selectedText()
-        
+
         # Only apply formatting if we have a progress message
         if selected_text:
             # Remove the old text and insert new one with dots
             cursor.removeSelectedText()
             cursor.insertText(updated_text)
-            
+
             # Apply the color to the selected text
             char_format = cursor.charFormat()
             char_format.setForeground(QColor(color_value, color_value, color_value))
@@ -5278,7 +5312,7 @@ class MainWindow(QMainWindow):
                 "pip install SpeechRecognition pyaudio"
             )
             return None
-        
+
         recognizer = sr.Recognizer()  # type: ignore[attr-defined]
         try:
             with sr.Microphone() as source:  # type: ignore[attr-defined]
@@ -5286,7 +5320,7 @@ class MainWindow(QMainWindow):
                 recognizer.adjust_for_ambient_noise(source, duration=0.5)  # type: ignore[attr-defined]
                 audio = recognizer.listen(source, timeout=5, phrase_time_limit=10)  # type: ignore[attr-defined]
                 self._append_log("🔄 음성을 텍스트로 변환 중...")
-                
+
                 # Try Korean first, then fallback to English
                 try:
                     text = recognizer.recognize_google(audio, language="ko-KR")  # type: ignore[attr-defined]
@@ -5324,7 +5358,7 @@ class MainWindow(QMainWindow):
             "그 아래에 이차방정식 공식을 삽입하는 코드를 작성해줘.'",
             enable_voice=True
         )
-        
+
         if ok and text.strip():
             self._generate_script_with_ai(text)
 
@@ -5350,13 +5384,13 @@ class MainWindow(QMainWindow):
             "(비워두면 기본적인 최적화가 진행됩니다)",
             enable_voice=True
         )
-        
+
         if ok:
             self._optimize_script_with_ai(text)
 
     def _get_text_input(self, title: str, prompt: str, enable_voice: bool = False) -> tuple[str, bool]:
         """Get text input from user with optional voice recognition and image upload.
-        
+
         Returns:
             Tuple of (text, ok_clicked, image_path)
         """"""Get text input from user via custom styled dialog with buttons inside form."""
@@ -5364,19 +5398,19 @@ class MainWindow(QMainWindow):
         dialog.setWindowTitle(title)
         dialog.setModal(True)
         dialog.setMinimumWidth(520)
-        
+
         # Set dialog background color (theme-aware)
         dialog.setStyleSheet("""
             QDialog {
                 background-color: %s;
             }
         """ % ("#1a1a1a" if self.dark_mode else "#ffffff"))
-        
+
         # Create main layout
         main_layout = QVBoxLayout(dialog)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
-        
+
         # Banner section with prompt text (prominent dark banner in dark mode)
         banner = QWidget()
         banner.setObjectName("prompt-banner")
@@ -5391,7 +5425,7 @@ class MainWindow(QMainWindow):
         banner_layout = QVBoxLayout(banner)
         banner_layout.setContentsMargins(24, 20, 24, 20)
         banner_layout.setSpacing(0)
-        
+
         # Centered description label with better typography
         desc_label = QLabel(prompt)
         desc_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -5407,13 +5441,13 @@ class MainWindow(QMainWindow):
         """ % ("#ffffff" if self.dark_mode else "#1f2937"))
         banner_layout.addWidget(desc_label)
         main_layout.addWidget(banner)
-        
+
         # Content area
         content = QWidget()
         content_layout = QVBoxLayout(content)
         content_layout.setContentsMargins(24, 24, 24, 24)
         content_layout.setSpacing(16)
-        
+
         # Create input container with buttons inside
         input_container = QWidget()
         input_container.setObjectName("input-container")
@@ -5430,7 +5464,7 @@ class MainWindow(QMainWindow):
         input_layout = QVBoxLayout(input_container)
         input_layout.setContentsMargins(20, 20, 20, 20)
         input_layout.setSpacing(14)
-        
+
         # Styled input field to match main page
         input_field = QTextEdit()
         input_field.setObjectName("script-editor")
@@ -5438,14 +5472,14 @@ class MainWindow(QMainWindow):
         input_field.setMinimumWidth(440)
         input_field.setMaximumHeight(280)
         input_field.setPlaceholderText("여기에 입력하세요")
-        
+
         input_layout.addWidget(input_field)
-        
+
         # Button row at bottom (inside input form)
         button_row = QHBoxLayout()
         button_row.setContentsMargins(0, 0, 0, 0)
         button_row.setSpacing(12)
-        
+
         # Voice button on the left (if enabled)
         voice_btn = None
         if enable_voice and sr is not None:
@@ -5466,7 +5500,7 @@ class MainWindow(QMainWindow):
             """ % (
                 ("#1a1a1a", "#2a2a2a", "#252525") if self.dark_mode else ("#ffffff", "#d1d5db", "#f3f4f6")
             ))
-            
+
             def on_voice_click():
                 dialog.hide()  # Hide dialog while recording
                 voice_text = self._voice_to_text()
@@ -5477,12 +5511,12 @@ class MainWindow(QMainWindow):
                         input_field.setPlainText(current_text + " " + voice_text)
                     else:
                         input_field.setPlainText(voice_text)
-            
+
             voice_btn.clicked.connect(on_voice_click)
             button_row.addWidget(voice_btn)
-        
+
         button_row.addStretch()
-        
+
         # Cancel button - text only, no background
         cancel_btn = QPushButton("Cancel")
         cancel_btn.setObjectName("secondary-button")
@@ -5506,7 +5540,7 @@ class MainWindow(QMainWindow):
         """ % (
             ("#9ca3af", "#1f1f1f") if self.dark_mode else ("#6b7280", "#f3f4f6")
         ))
-        
+
         # OK button - prominent blue button
         ok_btn = QPushButton("OK")
         ok_btn.setObjectName("primary-action")
@@ -5531,24 +5565,24 @@ class MainWindow(QMainWindow):
                 background-color: #3459c9;
             }
         """)
-        
+
         button_row.addWidget(cancel_btn)
         button_row.addWidget(ok_btn)
-        
+
         input_layout.addLayout(button_row)
-        
+
         content_layout.addWidget(input_container)
         main_layout.addWidget(content)
-        
+
         # Apply theme to text editor
         theme_name = "dark" if self.dark_mode else "light"
         theme_qss = _load_theme(theme_name)
         input_field.setStyleSheet(theme_qss)
-        
+
         # Apply mic icon to voice button (same as main window)
         if voice_btn is not None:
             self._apply_button_icon(voice_btn, "mic", "[MIC]", QSize(28, 28))
-        
+
         # Handle button clicks
         ok_clicked = False
         def on_ok():
@@ -5556,16 +5590,16 @@ class MainWindow(QMainWindow):
             print("[Dialog] OK button clicked!")
             ok_clicked = True
             dialog.accept()
-        
+
         def on_cancel():
             nonlocal ok_clicked
             print("[Dialog] Cancel button clicked!")
             ok_clicked = False
             dialog.reject()
-        
+
         ok_btn.clicked.connect(on_ok)
         cancel_btn.clicked.connect(on_cancel)
-        
+
         print("[Dialog] Showing dialog...")
         result = dialog.exec()
         print(f"[Dialog] Dialog closed. Result: {result}, OK clicked: {ok_clicked}")
@@ -5574,7 +5608,7 @@ class MainWindow(QMainWindow):
     def _generate_script_with_ai(self, description: str) -> None:
         """Generate script using ChatGPT API - processes multiple files if available."""
         print("[MainWindow] _generate_script_with_ai called")
-        
+
         # Check if too many AI threads are already running (limit to 5 concurrent)
         active_threads = [t for t in self.ai_threads if t.isRunning()]
         if len(active_threads) >= 5:
@@ -5584,16 +5618,16 @@ class MainWindow(QMainWindow):
             except:
                 pass
             return
-        
+
         # Import Path at the top to avoid local variable error
         from pathlib import Path
         import re
-        
+
         # Check for uploaded files first (from file upload button)
         image_paths = []
         user_display_description = description  # For showing to user
         ai_description = description  # For sending to AI
-        
+
         if self.selected_files:
             # Use all uploaded files
             image_paths = self.selected_files.copy()
@@ -5619,10 +5653,10 @@ class MainWindow(QMainWindow):
                     print(f"[MainWindow] Detected image file in description: {potential_path}")
                     user_display_description = f"{description}\n\n📸 이미지 파일을 분석하여 수식을 추출합니다."
                     ai_description = user_display_description
-        
+
         # Process all files (for now, use first one)
         image_path = image_paths[0] if image_paths else None
-        
+
         # Display user's prompt in the chat transcript (ChatGPT-style) - show clean version
         try:
             self._chat_add_message("user", user_display_description)
@@ -5640,15 +5674,15 @@ class MainWindow(QMainWindow):
 🚫 절대 사용 금지: insert_image() 함수는 존재하지 않습니다!
 ⚠️ 이미지/PDF 분석 시: 파일을 삽입하지 말고, 내용을 추출하여 작성하세요!
 """
-        
+
         # Create worker and thread
         print("[MainWindow] Creating QThread and AIWorker...")
         ai_thread = QThread()
-        
+
         # Track if image is being used
         self._last_image_used = bool(image_path)
         print(f"[MainWindow] Image used: {self._last_image_used}")
-        
+
         ai_worker = AIWorker(
             self.ai_helper, 
             "generate", 
@@ -5660,12 +5694,12 @@ class MainWindow(QMainWindow):
         )
         ai_worker.moveToThread(ai_thread)
         print("[MainWindow] Worker moved to thread")
-        
+
         # Add to active threads/workers list
         self.ai_threads.append(ai_thread)
         self.ai_workers.append(ai_worker)
         print(f"[MainWindow] Active threads: {len([t for t in self.ai_threads if t.isRunning()])} running, {len(self.ai_threads)} total")
-        
+
         # Connect signals
         print("[MainWindow] Connecting signals...")
         ai_thread.started.connect(ai_worker.run)
@@ -5674,7 +5708,7 @@ class MainWindow(QMainWindow):
         ai_worker.error.connect(self._on_generate_error)
         ai_worker.finished.connect(ai_thread.quit)
         ai_worker.error.connect(ai_thread.quit)
-        
+
         # Clean up thread from list when finished
         def cleanup_thread():
             if ai_thread in self.ai_threads:
@@ -5682,20 +5716,20 @@ class MainWindow(QMainWindow):
             if ai_worker in self.ai_workers:
                 self.ai_workers.remove(ai_worker)
             print(f"[MainWindow] Thread cleaned up. Remaining: {len(self.ai_threads)}")
-        
+
         ai_thread.finished.connect(cleanup_thread)
         ai_thread.finished.connect(ai_thread.deleteLater)
         print("[MainWindow] Signals connected")
-        
+
         # Start the thread
         print("[MainWindow] Starting thread...")
         ai_thread.start()
         print("[MainWindow] Thread started!")
-    
+
     def _generate_and_execute_with_ai(self, description: str) -> None:
         """Generate script using ChatGPT API and auto-execute it (without showing code to user)."""
         print("[MainWindow] _generate_and_execute_with_ai called")
-        
+
         # Check if too many AI threads are already running (limit to 5 concurrent)
         active_threads = [t for t in self.ai_threads if t.isRunning()]
         if len(active_threads) >= 5:
@@ -5705,16 +5739,16 @@ class MainWindow(QMainWindow):
             except:
                 pass
             return
-        
+
         # Import Path at the top to avoid local variable error
         from pathlib import Path
         import re
-        
+
         # Check for uploaded files first (from file upload button)
         image_paths = []
         user_display_description = description  # For showing to user
         ai_description = description  # For sending to AI
-        
+
         if self.selected_files:
             # Use all uploaded files
             image_paths = self.selected_files.copy()
@@ -5740,26 +5774,27 @@ class MainWindow(QMainWindow):
                     print(f"[MainWindow] Detected image file in description: {potential_path}")
                     user_display_description = f"{description}\n\n📸 이미지 파일을 분석하여 수식을 추출합니다."
                     ai_description = user_display_description
-        
+
         # Process all files (for now, use first one)
         image_path = image_paths[0] if image_paths else None
-        
+
         # Display user's prompt in the chat transcript (ChatGPT-style) - show clean version
         try:
             self._chat_add_message("user", user_display_description)
             self._show_thinking_animation()
         except Exception:
             self._append_user_input(user_display_description)
-        
-        self.run_button.setEnabled(False)
+
+        if hasattr(self, "run_button"):
+            self.run_button.setEnabled(False)
         if hasattr(self, "ai_generate_button"):
             self.ai_generate_button.setEnabled(False)
         if hasattr(self, "ai_optimize_button"):
             self.ai_optimize_button.setEnabled(False)
-        
+
         # Set auto-execute flag
         self._auto_execute_mode = True
-        
+
         # Get available functions context (platform-aware)
         if platform.system() == "Darwin":  # macOS
             context = """
@@ -5773,26 +5808,26 @@ class MainWindow(QMainWindow):
 수식 삽입 방법:
 
 1. insert_math_text() - 빠른 Unicode 변환 (텍스트로 삽입):
-   - insert_math_text("x^2 + y^2 = z^2") → x² + y² = z²
-   - insert_math_text("\\int_{0}^{\\infty} e^{-x} dx") → ∫₀^∞ e⁻ˣ dx
-   - insert_math_text("\\sum_{i=1}^{n} x_i") → ∑ᵢ₌₁ⁿ xᵢ
-   - insert_math_text("\\alpha + \\beta = \\gamma") → α + β = γ
+    - insert_math_text("x^2 + y^2 = z^2") → x² + y² = z²
+    - insert_math_text("\\int_{0}^{\\infty} e^{-x} dx") → ∫₀^∞ e⁻ˣ dx
+    - insert_math_text("\\sum_{i=1}^{n} x_i") → ∑ᵢ₌₁ⁿ xᵢ
+    - insert_math_text("\\alpha + \\beta = \\gamma") → α + β = γ
 
 2. open_formula_editor() - 수식 편집기 창 열기:
-   - open_formula_editor() → 수식 편집기 창을 열어서 수동으로 수식 입력 가능
-   - 사용자가 직접 수식을 입력하고 "넣기" 버튼을 클릭할 수 있음
+    - open_formula_editor() → 수식 편집기 창을 열어서 수동으로 수식 입력 가능
+    - 사용자가 직접 수식을 입력하고 "넣기" 버튼을 클릭할 수 있음
 
 3. insert_equation_via_editor() - 실제 수식 객체 (더 나은 품질):
-   - insert_equation_via_editor("a over b") → 분수 a/b (실제 수식)
-   - insert_equation_via_editor("x^2 + y^2") → 제곱 수식
-   - insert_equation_via_editor("int from 0 to infinity") → 적분 수식
+    - insert_equation_via_editor("a over b") → 분수 a/b (실제 수식)
+    - insert_equation_via_editor("x^2 + y^2") → 제곱 수식
+    - insert_equation_via_editor("int from 0 to infinity") → 적분 수식
    
-   수식 편집기 문법:
-   - "a over b" → 분수
-   - "x^2" → 제곱
-   - "x_1" → 아래첨자
-   - "int from a to b" → 적분
-   - "sum from i=1 to n" → 합
+    수식 편집기 문법:
+    - "a over b" → 분수
+    - "x^2" → 제곱
+    - "x_1" → 아래첨자
+    - "int from a to b" → 적분
+    - "sum from i=1 to n" → 합
 
 ⚠️ macOS에서는 지원되지 않는 기능:
 - insert_equation(): LaTeX 수식 삽입 (Windows 전용)
@@ -5817,15 +5852,15 @@ class MainWindow(QMainWindow):
 - insert_math_text(): 빠른 Unicode 변환 (텍스트로 삽입)
 - insert_equation(): 실제 수식 객체 삽입 (더 나은 품질)
 """
-        
+
         # Create worker and thread
         print("[MainWindow] Creating QThread and AIWorker...")
         ai_thread = QThread()
-        
+
         # Track if image is being used
         self._last_image_used = bool(image_path)
         print(f"[MainWindow] Image used: {self._last_image_used}")
-        
+
         ai_worker = AIWorker(
             self.ai_helper, 
             "generate", 
@@ -5837,12 +5872,12 @@ class MainWindow(QMainWindow):
         )
         ai_worker.moveToThread(ai_thread)
         print("[MainWindow] Worker moved to thread")
-        
+
         # Add to active threads/workers list
         self.ai_threads.append(ai_thread)
         self.ai_workers.append(ai_worker)
         print(f"[MainWindow] Active threads: {len([t for t in self.ai_threads if t.isRunning()])} running, {len(self.ai_threads)} total")
-        
+
         # Connect signals
         print("[MainWindow] Connecting signals...")
         ai_thread.started.connect(ai_worker.run)
@@ -5851,7 +5886,7 @@ class MainWindow(QMainWindow):
         ai_worker.error.connect(self._on_generate_error)
         ai_worker.finished.connect(ai_thread.quit)
         ai_worker.error.connect(ai_thread.quit)
-        
+
         # Clean up thread from list when finished
         def cleanup_thread():
             if ai_thread in self.ai_threads:
@@ -5859,24 +5894,24 @@ class MainWindow(QMainWindow):
             if ai_worker in self.ai_workers:
                 self.ai_workers.remove(ai_worker)
             print(f"[MainWindow] Thread cleaned up. Remaining: {len(self.ai_threads)}")
-        
+
         ai_thread.finished.connect(cleanup_thread)
         ai_thread.finished.connect(ai_thread.deleteLater)
         print("[MainWindow] Signals connected")
-        
+
         # Start the thread
         print("[MainWindow] Starting thread...")
         ai_thread.start()
         print("[MainWindow] Thread started!")
-    
+
     def _on_generate_finished(self, generated_code: str) -> None:
         """Handle successful script generation."""
         # Replace the progress line with completion message - triggers fade transition
         completion_msg = "✅ 스크립트 생성 완료!"
-        
+
         # Update with completion message (will trigger fade animation)
         self._update_progress_message(completion_msg)
-        
+
         # Clear selected files after successful generation (AI has processed the image)
         if self.selected_files:
             print(f"[MainWindow] Clearing selected_files after AI generation: {self.selected_files}")
@@ -5887,11 +5922,11 @@ class MainWindow(QMainWindow):
                     widget.widget().deleteLater()
             self.image_preview_container.hide()
             self.selected_files.clear()
-        
+
         # Parse all sections from response
         code = ""
         description = ""
-        
+
         def extract_section(text: str, tag: str) -> str:
             """Extract content between tags."""
             open_tag = f"[{tag}]"
@@ -5901,24 +5936,24 @@ class MainWindow(QMainWindow):
                 end = text.index(close_tag)
                 return text[start:end].strip()
             return ""
-        
+
         code = extract_section(generated_code, "CODE")
         description = extract_section(generated_code, "DESCRIPTION")
-        
+
         # Validation: If image was used, check if description has line listings
         if hasattr(self, '_last_image_used') and self._last_image_used:
             if "📋 Line" not in description and "Line 1:" not in description:
                 print("[WARNING] AI did not list lines from image! May have missed content.")
                 # Don't reject - just log the warning
-        
+
         # Wait for animation to complete before clearing
         def finish_animation():
             self._clear_progress_message()
             self._remove_thinking_animation()
-            
+
             # Always auto-execute (users want results, not code)
             self._auto_execute_mode = False  # Reset flag
-            
+
             if code:
                 # Show description first (what AI will do)
                 if description:
@@ -5926,7 +5961,7 @@ class MainWindow(QMainWindow):
                         self._chat_add_message("assistant", description)
                     except Exception:
                         pass
-                
+
                 # Check if HWP is available before executing (cross-platform)
                 hwp_available = False
                 try:
@@ -5935,7 +5970,7 @@ class MainWindow(QMainWindow):
                     hwp_available = True
                 except Exception:
                     pass
-                
+
                 if hwp_available:
                     # Execute the code to modify HWP
                     self._worker = ScriptWorker(code, self)
@@ -5966,21 +6001,22 @@ class MainWindow(QMainWindow):
                     self.ai_generate_button.setEnabled(True)
                 if hasattr(self, "ai_optimize_button"):
                     self.ai_optimize_button.setEnabled(True)
-        
+
         QTimer.singleShot(600, finish_animation)
-    
+
     def _on_auto_execution_finished(self) -> None:
         """Handle completion of auto-executed script."""
         try:
             self._chat_add_message("assistant", "✅ 한글 문서에 적용되었습니다!")
         except Exception:
             pass
-        self.run_button.setEnabled(True)
+        if hasattr(self, "run_button"):
+            self.run_button.setEnabled(True)
         if hasattr(self, "ai_generate_button"):
             self.ai_generate_button.setEnabled(True)
         if hasattr(self, "ai_optimize_button"):
             self.ai_optimize_button.setEnabled(True)
-    
+
     def _on_generate_error(self, error_msg: str) -> None:
         """Handle script generation error."""
         self._clear_progress_message()
@@ -6004,7 +6040,7 @@ class MainWindow(QMainWindow):
     def _optimize_script_with_ai(self, feedback: str) -> None:
         """Optimize current script using ChatGPT API."""
         print("[MainWindow] _optimize_script_with_ai called")
-        
+
         # Check if too many AI threads are already running (limit to 5 concurrent)
         active_threads = [t for t in self.ai_threads if t.isRunning()]
         if len(active_threads) >= 5:
@@ -6014,22 +6050,22 @@ class MainWindow(QMainWindow):
             except:
                 pass
             return
-        
+
         # Display user's prompt in the chat transcript (ChatGPT-style)
         try:
             self._chat_add_message("user", feedback if feedback.strip() else "(기본 최적화 요청)")
             self._show_thinking_animation()
         except Exception:
             self._append_user_input(feedback if feedback.strip() else "(기본 최적화 요청)")
-        
+
         self.run_button.setEnabled(False)
         if hasattr(self, "ai_generate_button"):
             self.ai_generate_button.setEnabled(False)
         if hasattr(self, "ai_optimize_button"):
             self.ai_optimize_button.setEnabled(False)
-        
+
         current_script = self.script_edit.toPlainText()
-        
+
         # Create worker and thread
         print("[MainWindow] Creating QThread and AIWorker...")
         ai_thread = QThread()
@@ -6042,12 +6078,12 @@ class MainWindow(QMainWindow):
         )
         ai_worker.moveToThread(ai_thread)
         print("[MainWindow] Worker moved to thread")
-        
+
         # Add to active threads/workers list
         self.ai_threads.append(ai_thread)
         self.ai_workers.append(ai_worker)
         print(f"[MainWindow] Active threads: {len([t for t in self.ai_threads if t.isRunning()])} running, {len(self.ai_threads)} total")
-        
+
         # Connect signals
         print("[MainWindow] Connecting signals...")
         ai_thread.started.connect(ai_worker.run)
@@ -6056,7 +6092,7 @@ class MainWindow(QMainWindow):
         ai_worker.error.connect(self._on_optimize_error)
         ai_worker.finished.connect(ai_thread.quit)
         ai_worker.error.connect(ai_thread.quit)
-        
+
         # Clean up thread from list when finished
         def cleanup_thread():
             if ai_thread in self.ai_threads:
@@ -6064,28 +6100,28 @@ class MainWindow(QMainWindow):
             if ai_worker in self.ai_workers:
                 self.ai_workers.remove(ai_worker)
             print(f"[MainWindow] Thread cleaned up. Remaining: {len(self.ai_threads)}")
-        
+
         ai_thread.finished.connect(cleanup_thread)
         ai_thread.finished.connect(ai_thread.deleteLater)
         print("[MainWindow] Signals connected")
-        
+
         # Start the thread
         print("[MainWindow] Starting thread...")
         ai_thread.start()
         print("[MainWindow] Thread started!")
-    
+
     def _on_optimize_finished(self, optimized_code: str) -> None:
         """Handle successful script optimization."""
         # Replace the progress line with completion message - triggers fade transition
         completion_msg = "✅ 스크립트 최적화 완료!"
-        
+
         # Update with completion message (will trigger fade animation)
         self._update_progress_message(completion_msg)
-        
+
         # Parse all sections from response
         code = ""
         description = ""
-        
+
         def extract_section(text: str, tag: str) -> str:
             """Extract content between tags."""
             open_tag = f"[{tag}]"
@@ -6095,10 +6131,10 @@ class MainWindow(QMainWindow):
                 end = text.index(close_tag)
                 return text[start:end].strip()
             return ""
-        
+
         code = extract_section(optimized_code, "CODE")
         description = extract_section(optimized_code, "DESCRIPTION")
-        
+
         # Wait for animation to complete before clearing
         def finish_animation():
             self._clear_progress_message()
@@ -6126,9 +6162,9 @@ class MainWindow(QMainWindow):
             self.ai_generate_button.setEnabled(True)
             if hasattr(self, "ai_optimize_button"):
                 self.ai_optimize_button.setEnabled(True)
-        
+
         QTimer.singleShot(600, finish_animation)
-    
+
     def _on_optimize_error(self, error_msg: str) -> None:
         """Handle script optimization error."""
         self._clear_progress_message()
@@ -6198,7 +6234,7 @@ class MainWindow(QMainWindow):
         # Fallback: use menu if no drawer panel present (legacy behavior)
         menu = QMenu(self)
         menu.setMinimumWidth(250)
-        
+
         # Apply custom styling based on theme
         if self.dark_mode:
             menu.setStyleSheet("""
@@ -6264,31 +6300,31 @@ class MainWindow(QMainWindow):
                     padding-left: 10px;
                 }
             """)
-        
+
         # Backup current script
         backup_script_action = menu.addAction("💾 현재 스크립트 백업")
         backup_script_action.triggered.connect(self._backup_current_script)
-        
+
         # Backup session
         backup_session_action = menu.addAction("📦 세션 백업 (스크립트 + 출력)")
         backup_session_action.triggered.connect(self._backup_session)
-        
+
         menu.addSeparator()
-        
+
         # Restore script
         restore_script_action = menu.addAction("📄 스크립트 복원...")
         restore_script_action.triggered.connect(self._restore_script_dialog)
-        
+
         # Restore session
         restore_session_action = menu.addAction("🔄 세션 복원...")
         restore_session_action.triggered.connect(self._restore_session_dialog)
-        
+
         menu.addSeparator()
-        
+
         # View backup info
         view_backups_action = menu.addAction("ℹ️  백업 정보 보기")
         view_backups_action.triggered.connect(self._show_backup_info)
-        
+
         # Show menu at button position (fallback to profile button or cursor if backup button missing)
         anchor_btn = getattr(self, "backup_icon_btn", None) or getattr(self, "drawer_profile_btn", None)
         try:
@@ -6304,14 +6340,14 @@ class MainWindow(QMainWindow):
             except Exception:
                 # Last-resort: show in the center of the main window
                 menu.exec(self.mapToGlobal(self.rect().center()))
-    
+
     def _backup_current_script(self) -> None:
         """Create a backup of the current script."""
         script_content = self.script_edit.toPlainText()
         if not script_content.strip():
             self._show_warning_dialog("백업 실패", "백업할 스크립트가 없습니다.")
             return
-        
+
         # Get custom name from user
         from datetime import datetime
         default_name = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -6320,26 +6356,26 @@ class MainWindow(QMainWindow):
             f"백업 이름을 입력하세요\n(비워두면 '{default_name}'으로 저장됩니다)",
             enable_voice=False
         )
-        
+
         if not ok:
             return
-        
+
         custom_name = custom_name.strip() or default_name
-        
+
         try:
             backup_file = self.backup_manager.backup_script(script_content, "script", custom_name)
             file_size_kb = backup_file.stat().st_size / 1024
             backup_dir = backup_file.parent
-            
+
             dialog = QDialog(self)
             dialog.setWindowTitle("스크립트 백업")
             dialog.setMinimumWidth(500)
             layout = QVBoxLayout(dialog)
-            
+
             title = QLabel("✅ 백업이 완료되었습니다")
             title.setStyleSheet("font-size:16px; font-weight:700;")
             layout.addWidget(title)
-            
+
             grid = QWidget()
             gl = QGridLayout(grid)
             gl.setHorizontalSpacing(10)
@@ -6351,7 +6387,7 @@ class MainWindow(QMainWindow):
             gl.addWidget(QLabel(f"<span style='font-weight:600; color:{lbl_color}'>크기</span>"), 1, 0)
             gl.addWidget(QLabel(f"<span style='color:{val_color}'>{file_size_kb:.2f} KB</span>"), 1, 1)
             layout.addWidget(grid)
-            
+
             row = QWidget()
             row_lyt = QHBoxLayout(row)
             row_lyt.setContentsMargins(0, 8, 0, 0)
@@ -6383,7 +6419,7 @@ class MainWindow(QMainWindow):
             menu_btn.setMenu(menu)
             row_lyt.addWidget(menu_btn)
             layout.addWidget(row)
-            
+
             def open_in_finder() -> None:
                 QDesktopServices.openUrl(QUrl.fromLocalFile(str(backup_dir)))
             def copy_path() -> None:
@@ -6391,27 +6427,27 @@ class MainWindow(QMainWindow):
             open_action.triggered.connect(open_in_finder)
             copy_action.triggered.connect(copy_path)
             path_edit.mousePressEvent = lambda e: open_in_finder()
-            
+
             tip = QLabel("💡 백업 메뉴에서 언제든지 복원할 수 있습니다")
             tip.setStyleSheet(f"font-size:12px; color:{lbl_color};")
             layout.addWidget(tip)
-            
+
             btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
             layout.addWidget(btns)
             btns.accepted.connect(dialog.accept)
             dialog.exec()
         except Exception as e:
             self._show_error_dialog(f"백업 실패:\n{str(e)}")
-    
+
     def _backup_session(self) -> None:
         """Create a backup of the current session (script + output)."""
         script_content = self.script_edit.toPlainText()
         output_content = self.log_output.toPlainText()
-        
+
         if not script_content.strip() and not output_content.strip():
             self._show_warning_dialog("백업 실패", "백업할 내용이 없습니다.")
             return
-        
+
         # Get custom name from user
         from datetime import datetime
         default_name = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -6420,12 +6456,12 @@ class MainWindow(QMainWindow):
             f"백업 이름을 입력하세요\n(비워두면 '{default_name}'으로 저장됩니다)",
             enable_voice=False
         )
-        
+
         if not ok:
             return
-        
+
         custom_name = custom_name.strip() or default_name
-        
+
         try:
             session_data = {
                 "script": script_content,
@@ -6435,16 +6471,16 @@ class MainWindow(QMainWindow):
             backup_file = self.backup_manager.backup_session(session_data, custom_name)
             file_size_kb = backup_file.stat().st_size / 1024
             backup_dir = backup_file.parent
-            
+
             dialog = QDialog(self)
             dialog.setWindowTitle("세션 백업")
             dialog.setMinimumWidth(500)
             layout = QVBoxLayout(dialog)
-            
+
             title = QLabel("✅ 백업이 완료되었습니다")
             title.setStyleSheet("font-size:16px; font-weight:700;")
             layout.addWidget(title)
-            
+
             grid = QWidget()
             gl = QGridLayout(grid)
             gl.setHorizontalSpacing(10)
@@ -6456,7 +6492,7 @@ class MainWindow(QMainWindow):
             gl.addWidget(QLabel(f"<span style='font-weight:600; color:{lbl_color}'>크기</span>"), 1, 0)
             gl.addWidget(QLabel(f"<span style='color:{val_color}'>{file_size_kb:.2f} KB</span>"), 1, 1)
             layout.addWidget(grid)
-            
+
             row = QWidget()
             row_lyt = QHBoxLayout(row)
             row_lyt.setContentsMargins(0, 8, 0, 0)
@@ -6488,7 +6524,7 @@ class MainWindow(QMainWindow):
             menu_btn.setMenu(menu)
             row_lyt.addWidget(menu_btn)
             layout.addWidget(row)
-            
+
             def open_in_finder() -> None:
                 QDesktopServices.openUrl(QUrl.fromLocalFile(str(backup_dir)))
             def copy_path() -> None:
@@ -6496,18 +6532,18 @@ class MainWindow(QMainWindow):
             open_action.triggered.connect(open_in_finder)
             copy_action.triggered.connect(copy_path)
             path_edit.mousePressEvent = lambda e: open_in_finder()
-            
+
             tip = QLabel("📝 스크립트와 출력이 함께 저장되었습니다 · 💡 세션 복원 메뉴에서 복원할 수 있습니다")
             tip.setStyleSheet(f"font-size:12px; color:{lbl_color};")
             layout.addWidget(tip)
-            
+
             btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
             layout.addWidget(btns)
             btns.accepted.connect(dialog.accept)
             dialog.exec()
         except Exception as e:
             self._show_error_dialog(f"세션 백업 실패:\n{str(e)}")
-    
+
     def _restore_script_dialog(self) -> None:
         """Show dialog to restore a backed up script."""
         try:
@@ -6515,19 +6551,19 @@ class MainWindow(QMainWindow):
             if not backups:
                 self._show_warning_dialog("복원 실패", "백업된 스크립트가 없습니다.")
                 return
-            
+
             # Create a simple selection dialog
             dialog = QDialog(self)
             dialog.setWindowTitle("스크립트 복원")
             dialog.setMinimumWidth(400)
             layout = QVBoxLayout(dialog)
-            
+
             # List of backups
             backup_list_widget = QWidget()
             backup_list_layout = QVBoxLayout(backup_list_widget)
-            
+
             selected_backup: list[Path] = []
-            
+
             for backup_file in backups:
                 info = self.backup_manager.get_backup_info(backup_file)
                 display_text = f"📄 {info['custom_name']}\n🕒 {info['formatted_time']}"
@@ -6537,9 +6573,9 @@ class MainWindow(QMainWindow):
                 btn.setStyleSheet("text-align: left; padding: 10px;")
                 btn.clicked.connect(lambda checked, bf=backup_file: selected_backup.append(bf))
                 backup_list_layout.addWidget(btn)
-            
+
             layout.addWidget(backup_list_widget)
-            
+
             # Buttons
             button_layout = QHBoxLayout()
             cancel_btn = QPushButton("취소")
@@ -6550,7 +6586,7 @@ class MainWindow(QMainWindow):
             button_layout.addWidget(cancel_btn)
             button_layout.addWidget(ok_btn)
             layout.addLayout(button_layout)
-            
+
             if dialog.exec():
                 if selected_backup:
                     try:
@@ -6562,7 +6598,7 @@ class MainWindow(QMainWindow):
                         self._show_error_dialog(f"복원 실패:\n{str(e)}")
         except Exception as e:
             self._show_error_dialog(f"백업 로드 실패:\n{str(e)}")
-    
+
     def _restore_session_dialog(self) -> None:
         """Show dialog to restore a backed up session."""
         try:
@@ -6570,19 +6606,19 @@ class MainWindow(QMainWindow):
             if not backups:
                 self._show_warning_dialog("복원 실패", "백업된 세션이 없습니다.")
                 return
-            
+
             # Create a simple selection dialog
             dialog = QDialog(self)
             dialog.setWindowTitle("세션 복원")
             dialog.setMinimumWidth(400)
             layout = QVBoxLayout(dialog)
-            
+
             # List of backups
             backup_list_widget = QWidget()
             backup_list_layout = QVBoxLayout(backup_list_widget)
-            
+
             selected_backup: list[Path] = []
-            
+
             for backup_file in backups:
                 info = self.backup_manager.get_backup_info(backup_file)
                 display_text = f"📦 {info['custom_name']}\n🕒 {info['formatted_time']}"
@@ -6592,9 +6628,9 @@ class MainWindow(QMainWindow):
                 btn.setStyleSheet("text-align: left; padding: 10px;")
                 btn.clicked.connect(lambda checked, bf=backup_file: selected_backup.append(bf))
                 backup_list_layout.addWidget(btn)
-            
+
             layout.addWidget(backup_list_widget)
-            
+
             # Buttons
             button_layout = QHBoxLayout()
             cancel_btn = QPushButton("취소")
@@ -6605,7 +6641,7 @@ class MainWindow(QMainWindow):
             button_layout.addWidget(cancel_btn)
             button_layout.addWidget(ok_btn)
             layout.addLayout(button_layout)
-            
+
             if dialog.exec():
                 if selected_backup:
                     try:
@@ -6787,13 +6823,13 @@ class MainWindow(QMainWindow):
             # HWP is not running - show a friendly dialog
             print(f"[Startup Check] ⚠️ HWP not running: {e}")
             self._update_hwp_status_indicator(connected=False)
-            
+
             # Get the correct app name based on platform
             if platform.system() == "Darwin":
                 app_name = "Hancom Office HWP"
             else:
                 app_name = "한글(HWP)"
-            
+
             # Create a friendly info dialog
             msg = QMessageBox(self)
             msg.setIcon(QMessageBox.Information)
@@ -6809,7 +6845,7 @@ class MainWindow(QMainWindow):
             )
             msg.setStandardButtons(QMessageBox.Ok)
             msg.setDefaultButton(QMessageBox.Ok)
-            
+
             # Apply theme-appropriate styling
             if self.dark_mode:
                 msg.setStyleSheet("""
@@ -6848,14 +6884,14 @@ class MainWindow(QMainWindow):
                         background-color: #e0e0e0;
                     }
                 """)
-            
+
             msg.exec()
-    
+
     def _update_hwp_status_indicator(self, connected: bool) -> None:
         """Update the HWP filename label to show connection status."""
         if not hasattr(self, "hwp_filename_label"):
             return
-        
+
         try:
             current_text = self.hwp_filename_label.text()
             self.hwp_filename_label.setText(f"{current_text}")
@@ -6914,25 +6950,26 @@ class MainWindow(QMainWindow):
             self.hwp_filename_label.setObjectName("hwp-filename-label")
             self.hwp_filename_label.setMinimumWidth(120)
             self.hwp_filename_label.setMinimumHeight(32)
-            self.hwp_filename_label.setStyleSheet("""
-                QLabel#hwp-filename-label {
+            color = "#fff" if self.dark_mode else "#111"
+            self.hwp_filename_label.setStyleSheet(f"""
+                QLabel#hwp-filename-label {{
                     background: transparent;
-                    color: #111;
+                    color: {color};
                     font-size: 16px;
                     font-weight: 600;
                     padding: 8px 16px;
                     border: none;
                     border-radius: 4px;
                     margin-left: -15px;
-                }
+                }}
             """)
             self._last_hwp_filename = filename
         except Exception as e:
             print(f"[DEBUG] Exception in _update_hwp_filename: {e}")
             self.hwp_filename_label.setText("")
             self._last_hwp_filename = ""
-            
-        
+
+
 
     def _new_chat(self) -> None:
         """Create and switch to a new chat, clearing UI and persisting state."""

@@ -1,3 +1,10 @@
+/* Aggressively remove all borders, outlines, and shadows from QMenu and its items */
+QMenu, QMenu::item, QMenu::indicator {
+    border: none !important;
+    outline: none !important;
+    box-shadow: none !important;
+    background: transparent;
+}
 QWidget {
     background-color: #ffffff;
     color: #2c2c2c;
@@ -453,5 +460,24 @@ QScrollBar::sub-page:horizontal {
 QLabel#hwp-filename-label {
     background: transparent !important;
     background-color: transparent !important;
+}
+
+/* Remove border from model selection parent */
+QWidget#model-dropdown, QFrame#model-dropdown {
+    border: none !important;
+    background: #fff;
+}
+
+/* Style for model selection dropdown items */
+QWidget.model-item-selected, QLabel.model-item-selected, QPushButton.model-item-selected {
+    background: #e8f0fe !important;
+    color: #174ea6 !important;
+    border-radius: 6px;
+}
+
+/* Optional: style for non-selected items */
+QWidget.model-item, QLabel.model-item, QPushButton.model-item {
+    background: transparent;
+    color: #222;
 }
 
