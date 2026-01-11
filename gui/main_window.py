@@ -765,8 +765,8 @@ class MainWindow(QMainWindow):
                 item_wrap.setObjectName("drawer-chat-item-wrap")
                 # Prevent chat items from expanding vertically when list is short
                 item_wrap.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-                item_wrap.setFixedHeight(48)
-                item_wrap.setMaximumHeight(48)
+                item_wrap.setFixedHeight(30)
+                item_wrap.setMaximumHeight(30)
                 h = QHBoxLayout(item_wrap)
                 # Slightly tighter wrap padding and spacing for compact sidebar
                 h.setContentsMargins(4, 0, 4, 0)
@@ -776,15 +776,11 @@ class MainWindow(QMainWindow):
                 btn.setObjectName("drawer-chat-item")
                 btn.setCursor(Qt.CursorShape.PointingHandCursor)
                 btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-                # Adjust height and padding to fit the smaller row and center text vertically
-                btn.setMinimumHeight(28)
-                try:
-                    orig_btn_style = btn.styleSheet() if hasattr(btn, 'styleSheet') else ""
-                    # Adjust padding based on theme
-                    padding_top = "2px" if self.dark_mode else "-5px"
-                    btn.setStyleSheet((orig_btn_style or "") + f"padding-top:{padding_top}; padding-left:12px;")
-                except Exception:
-                    pass
+                # Set fixed height to match QToolButtons and center text vertically
+                btn.setFixedHeight(28)
+                # Center text vertically using alignment
+                btn.setStyleSheet("text-align: left; qproperty-alignment: AlignVCenter;")
+
                 font = btn.font()
                 font.setPointSize(14)
                 # Use DemiBold weight for slightly lighter emphasis
@@ -2143,28 +2139,28 @@ class MainWindow(QMainWindow):
         # Section title
         # Section title with reset-search button on the right
         section_wrap = QWidget()
-        sw_lyt = QHBoxLayout(section_wrap)
+        sw_lyt = QVBoxLayout(section_wrap)
         sw_lyt.setContentsMargins(0, 0, 0, 0)
-        sw_lyt.setSpacing(8)
+        sw_lyt.setSpacing(0)
+        spacer = QWidget()
+        spacer.setFixedHeight(18)  # Force space above the label
+        sw_lyt.addWidget(spacer)
         section = QLabel("내 채팅")
         section.setObjectName("drawer-section-title")
-        sw_lyt.addWidget(section, 0, Qt.AlignmentFlag.AlignLeft)
-        # Reset search button: clears the current chat filter
+        sw_lyt.addWidget(section)
+        # If you want to keep the reset button, you can add it below or adapt as needed.
+        # For now, we keep the reset button logic after the section label.
         reset_btn = QToolButton()
         reset_btn.setObjectName('drawer-section-reset')
         reset_btn.setToolTip('검색 초기화')
-        # Use auto-raise for a flat look and remove any border via inline style
         reset_btn.setAutoRaise(True)
-        # Increase size for easier tapping and visual balance
         reset_btn.setFixedSize(36, 36)
         reset_btn.setText('✕')
-        # Remove the gray border and use a neutral muted color
         try:
             reset_btn.setStyleSheet('background: transparent; border: none; font-size: 16px; color: #6b7280;')
         except Exception:
             pass
         reset_btn.clicked.connect(self._reset_chat_filter)
-        # hidden by default until a filter is active
         reset_btn.hide()
         sw_lyt.addWidget(reset_btn, 0, Qt.AlignmentFlag.AlignRight)
         lyt.addWidget(section_wrap)

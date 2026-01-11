@@ -290,7 +290,7 @@ QScrollBar::handle:horizontal {
 QWidget#drawer-overlay { background: rgba(0,0,0,0.14); }
 
 /* Compact chat item padding to match reference */
-QPushButton#drawer-chat-item { padding: 8px 8px; min-height: 44px; }
+QPushButton#drawer-chat-item { padding: 8px 8px; }
 /* Remove wrapper border; spacing provides separation between rows */
 QWidget#drawer-chat-list QWidget#drawer-chat-item-wrap { padding: 0px 2px; }
 QToolButton#drawer-chat-delete {
@@ -331,11 +331,10 @@ QPushButton#drawer-action {
     font-weight: 800;
     color: #0f1724;
     border-radius: 10px;
-    min-height: 48px;
 }
 QPushButton#drawer-action:hover { background-color: #f4f6f8; }
 
-QLabel#drawer-section-title { color: #9ca3af; font-weight: 700; margin-left: 6px; margin-top: 6px; }
+QLabel#drawer-section-title { color: #9ca3af; font-weight: 700; margin-left: 6px; margin-top: 16px; }
 
 /* Chat list items - compact */
 QWidget#drawer-chat-list QWidget#drawer-chat-item-wrap { padding: 0px 2px; }
