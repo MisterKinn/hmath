@@ -21,7 +21,8 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
-firebase_account.py
+
+backend/firebase_account.py
 
 # Virtual Env
 .venv
