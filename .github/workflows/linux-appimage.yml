@@ -1,0 +1,40 @@
+name: Build AppImage
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+  release:
+    types: [created]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y wget libfuse2
+
+    - name: Install Python deps
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install -r requirements.txt pyinstaller Pillow
+
+    - name: Build AppImage
+      run: bash scripts/build_linux.sh
+
+    - name: Upload AppImage artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: appimages
+        path: "*.AppImage"

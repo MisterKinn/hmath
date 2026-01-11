@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Formulite
+Comment=Inline HWP AI desktop app
+Exec=Formulite
+Icon=formulite
+Terminal=false
+Categories=Office;Utility;
+StartupWMClass=Formulite
