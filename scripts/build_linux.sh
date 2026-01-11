@@ -81,17 +81,28 @@ else
 fi
 
 # Download linuxdeployqt if necessary
-LDQ="linuxdeployqt-7-x86_64.AppImage"
+LDQ="linuxdeployqt-x86_64.AppImage"
 if [ ! -f "$LDQ" ]; then
-  echo "[build] Checking linuxdeployqt release URL..."
-  http_status=$(curl -s -o /dev/null -w "%{http_code}" "https://github.com/linuxdeploy/linuxdeployqt/releases/download/7/linuxdeployqt-7-x86_64.AppImage")
-  echo "[build] linuxdeployqt HTTP status: $http_status"
-  if [ "$http_status" -ne 200 ]; then
-    echo "[build] linuxdeployqt release not found (HTTP $http_status); aborting. Please verify the download URL in the script."
+  echo "[build] Looking up latest linuxdeployqt AppImage from GitHub releases..."
+  latest_json=$(curl -s "https://api.github.com/repos/linuxdeploy/linuxdeployqt/releases/latest")
+  asset_url=$(python3 - <<'PY'
+import sys, json
+j = json.load(sys.stdin)
+assets = j.get('assets', [])
+for a in assets:
+    n = a.get('name','')
+    if 'x86_64.AppImage' in n:
+        print(a.get('browser_download_url'))
+        sys.exit(0)
+sys.exit(1)
+PY
+  ) || true
+  if [ -z "$asset_url" ]; then
+    echo "[build] Could not find a linuxdeployqt AppImage asset in the latest release; aborting"
     exit 1
   fi
-  echo "[build] Downloading linuxdeployqt..."
-  wget --tries=3 -O "$LDQ" "https://github.com/linuxdeploy/linuxdeployqt/releases/download/7/linuxdeployqt-7-x86_64.AppImage"
+  echo "[build] Downloading linuxdeployqt from $asset_url"
+  wget --tries=3 -O "$LDQ" "$asset_url"
   chmod +x "$LDQ"
   echo "[build] Downloaded $LDQ (size: $(stat -c%s "$LDQ" 2>/dev/null || stat -f%z "$LDQ"))"
   file "$LDQ" || true
