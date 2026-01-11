@@ -49,46 +49,7 @@ from backend.ai_model_helper import MultiModelAIHelper
 from backend.backup_manager import BackupManager
 
 
-class FileDropTextEdit(QTextEdit):
-    """Custom QTextEdit that forwards file drops to parent window instead of inserting file paths."""
-    
-    file_dropped = Signal(str)  # Signal to emit when file is dropped
-    
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setAcceptDrops(True)
-    
-    def dragEnterEvent(self, event):
-        """Accept file drops but don't process them here."""
-        if event.mimeData().hasUrls():
-            # Check if any URL is an image or PDF
-            for url in event.mimeData().urls():
-                file_path = url.toLocalFile()
-                if file_path.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.pdf')):
-                    event.acceptProposedAction()
-                    return
-        # For non-file drops (like text), use default behavior
-        super().dragEnterEvent(event)
-    
-    def dragMoveEvent(self, event):
-        """Accept drag move for files."""
-        if event.mimeData().hasUrls():
-            event.acceptProposedAction()
-        else:
-            super().dragMoveEvent(event)
-    
-    def dropEvent(self, event):
-        """Handle file drops by forwarding to parent, not inserting paths."""
-        if event.mimeData().hasUrls():
-            for url in event.mimeData().urls():
-                file_path = url.toLocalFile()
-                if file_path.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.pdf')):
-                    # Emit signal instead of inserting text
-                    self.file_dropped.emit(file_path)
-                    event.acceptProposedAction()
-                    return
-        # For non-file drops (like text), use default behavior
-        super().dropEvent(event)
+from .widgets import FileDropTextEdit
 
 
 class AIWorker(QObject):
@@ -596,12 +557,15 @@ class MainWindow(QMainWindow):
             self._load_persisted_state()
         except Exception:
             pass
-        # Always clear current chat ID at startup and show welcome message
+        # Always clear current chat ID at startup
         self._current_chat_id = None
-        self._show_welcome_message()
-        # Render chat list if there are existing chats
-        if self._chats:
-            self._render_chat_list()
+        # Show welcome message if there are no chats, otherwise restore chat
+        if not self._chats:
+            self._show_welcome_message()
+        else:
+            self._restore_chat_messages(self._chats[0])
+        # Render chat list (will show empty state if no chats)
+        self._render_chat_list()
         # Apply responsive UI tweaks immediately and on resize
         self._apply_responsive_layout()
         
@@ -826,9 +790,14 @@ class MainWindow(QMainWindow):
                 if widget:
                     widget.deleteLater()
             # Apply filter
-            # No longer seeding placeholder chats - we handle empty state with _ensure_default_chat
-            
             chats = [c for c in self._chats if (self._chat_filter.lower() in (c.get("title", "").lower()))]
+            if not chats:
+                # Show '무엇이든 물어보세요' if no chats
+                empty_label = QLabel("무엇이든 물어보세요")
+                empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                empty_label.setStyleSheet("font-size: 18px; color: #888; font-weight: 600; margin: 24px 0;")
+                layout.addWidget(empty_label)
+                return
             for chat in chats:
                 item_wrap = QWidget()
                 item_wrap.setObjectName("drawer-chat-item-wrap")

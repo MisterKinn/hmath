@@ -219,15 +219,12 @@ class MultiModelAIHelper:
         for attempt in range(max_retries):
             try:
                 print(f"[MultiModelAI] Calling OpenAI {model} (attempt {attempt + 1})")
-                
                 if image_base64:
-                    # Vision request
                     image_format = "jpeg"
                     if image_base64.startswith("/9j/"):
                         image_format = "jpeg"
                     elif image_base64.startswith("iVBORw"):
                         image_format = "png"
-                    
                     messages = [{
                         "role": "user",
                         "content": [
@@ -235,45 +232,37 @@ class MultiModelAIHelper:
                             {"type": "image_url", "image_url": {"url": f"data:image/{image_format};base64,{image_base64}"}}
                         ]
                     }]
-                    
                     response = self.openai_client.chat.completions.create(
                         model=model,
                         messages=messages,
                         max_completion_tokens=2000
                     )
                 else:
-                    # Text-only request
                     response = self.openai_client.chat.completions.create(
                         model=model,
                         messages=[{"role": "user", "content": prompt}],
                         max_completion_tokens=2000
                     )
-                
                 if response.choices:
                     result = response.choices[0].message.content
                     print(f"[MultiModelAI] OpenAI returned {len(result)} chars")
                     return result
                 return None
-                
             except Exception as e:
                 error_name = type(e).__name__
                 error_msg = str(e)
                 print(f"[MultiModelAI] OpenAI {error_name}: {error_msg}")
-                
                 if "RateLimitError" in error_name or "rate" in error_msg.lower():
                     if attempt < max_retries - 1:
-                        wait_time = (2 ** attempt) + 1
+                        wait_time = 0.5  # Reduced wait time for rate limit
                         print(f"[MultiModelAI] Rate limit, waiting {wait_time}s...")
                         time.sleep(wait_time)
                         continue
-                
-                # Log model not found errors specifically
                 if "model_not_found" in error_msg.lower() or "not found" in error_msg.lower():
                     print(f"[MultiModelAI] Model '{model}' not found. Available models should be checked.")
                     print(f"[MultiModelAI] Full error: {error_msg}")
-                
                 if attempt < max_retries - 1:
-                    wait_time = 1 + (attempt * 0.5)
+                    wait_time = 0.2  # Reduced retry wait time
                     print(f"[MultiModelAI] Retrying in {wait_time}s...")
                     time.sleep(wait_time)
                     continue
