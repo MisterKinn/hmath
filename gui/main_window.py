@@ -519,9 +519,45 @@ class MainWindow(QMainWindow):
         self.current_model = self.ai_helper.get_cheapest_model() or "gpt-5-nano"  # Default to cheapest
         self.backup_manager = BackupManager()  # Initialize backup manager
         # Profile defaults (ensure drawer/profile UI can be built safely)
+        # Profile info (will be loaded from Firebase after OAuth login)
         self.profile_display_name = "사용자"
         self.profile_handle = ""
         self.profile_plan = "Free"
+        self.profile_avatar_url = None
+        self.profile_uid = None
+
+        # OAuth login and user info fetch
+        try:
+            from backend.oauth_desktop import start_oauth_flow, get_stored_user
+            user = get_stored_user()
+            if not user:
+                # Launch browser login and wait for callback
+                start_oauth_flow()
+                user = get_stored_user()
+            if user:
+                self.profile_uid = user.get("uid")
+                self.profile_display_name = user.get("name") or "사용자"
+                self.profile_plan = user.get("tier") or "Free"
+                self.profile_avatar_url = user.get("photo_url")
+                self.profile_handle = user.get("handle") or user.get("email", "").split("@")[0] or ""
+            else:
+                print("[OAuth] No user info found after login.")
+        except Exception as e:
+            print(f"[OAuth] Login or user info fetch failed: {e}")
+
+        # Optionally, fetch more profile info from Firebase if needed
+        if self.profile_uid:
+            try:
+                from backend.firebase_profile import get_user_profile
+                profile = get_user_profile(self.profile_uid)
+                if profile:
+                    self.profile_display_name = profile.get("display_name") or self.profile_display_name
+                    self.profile_plan = profile.get("tier") or self.profile_plan
+                    self.profile_avatar_url = profile.get("photo_url") or self.profile_avatar_url
+                    # Set handle from Firebase if available, fallback to email prefix
+                    self.profile_handle = profile.get("handle") or profile.get("email", "").split("@")[0] or self.profile_handle
+            except Exception as e:
+                print(f"[Profile] Failed to load Firebase profile: {e}")
         # Drawer state
         self._drawer_open = False
         # Simple in-memory chat store and UI helpers
@@ -2247,42 +2283,34 @@ class MainWindow(QMainWindow):
 
         avatar = QLabel()
         avatar.setObjectName("drawer-avatar")
-        # Try to load a profile photo if present (user-provided only)
+        # Try to load avatar from Firebase photo_url if available
         try:
-            assets_dir = Path(__file__).resolve().parents[1] / "public" / "img"
-            # Prefer explicit user-provided path only. Do NOT fallback to bundled images — show an initial-letter avatar when no user image is set.
-            candidate = getattr(self, "profile_avatar_path", None)
-            if candidate:
-                candidate = Path(candidate)
-            if candidate and Path(candidate).exists():
-                # Load and make a rounded pixmap
-                def _rounded_pixmap(pth, size=48):
-                    pix = QPixmap(str(pth))
-                    if pix.isNull():
-                        return None
-                    pix = pix.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
-                    out = QPixmap(size, size)
+            if self.profile_avatar_url:
+                from urllib.request import urlopen
+                from PySide6.QtCore import QByteArray
+                img_data = urlopen(self.profile_avatar_url).read()
+                pix = QPixmap()
+                pix.loadFromData(QByteArray(img_data))
+                if not pix.isNull():
+                    pix = pix.scaled(48, 48, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
+                    out = QPixmap(48, 48)
                     out.fill(Qt.GlobalColor.transparent)
                     painter = QPainter(out)
                     try:
                         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
                         pathp = QPainterPath()
-                        pathp.addEllipse(0, 0, size, size)
+                        pathp.addEllipse(0, 0, 48, 48)
                         painter.setClipPath(pathp)
                         painter.drawPixmap(0, 0, pix)
                     finally:
                         painter.end()
-                    return out
-                rounded = _rounded_pixmap(candidate, 48)
-                if rounded:
-                    avatar.setPixmap(rounded)
+                    avatar.setPixmap(out)
                     avatar.setFixedSize(48, 48)
                     avatar.setStyleSheet("border-radius: 24px; background: transparent;")
                 else:
                     raise Exception("invalid pixmap")
             else:
-                # No explicit user avatar provided — fall back to initial-letter avatar (handled below in except)
-                raise Exception("no avatar found")
+                raise Exception("no avatar url")
         except Exception:
             # Fallback: initial letter avatar with prominent blue background
             initial = (self.profile_display_name[:1] or "U").upper()
@@ -2291,19 +2319,6 @@ class MainWindow(QMainWindow):
             try:
                 avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 avatar.setStyleSheet("background:#2b7bf6; color:#ffffff; border-radius:24px; font-weight:800; font-size:16px;")
-                f = avatar.font()
-                f.setPointSize(16)
-                try:
-                    f.setWeight(QFont.Weight.DemiBold)
-                except Exception:
-                    f.setWeight(QFont.Weight.Bold)
-                avatar.setFont(f)
-            except Exception:
-                pass
-            # Center the initial and apply the strong blue circle style from the design
-            try:
-                avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                avatar.setStyleSheet("background:#2b7bf6; color:#ffffff; border-radius:20px; font-weight:800; font-size:16px;")
                 f = avatar.font()
                 f.setPointSize(16)
                 try:
@@ -3965,45 +3980,35 @@ class MainWindow(QMainWindow):
         t_lyt = QHBoxLayout(top)
         t_lyt.setContentsMargins(0, 0, 0, 0)
         t_lyt.setSpacing(10)
-        avatar_src = getattr(self, 'profile_avatar_path', None)
         avatar_lbl = QLabel()
         avatar_lbl.setFixedSize(48, 48)
         avatar_lbl.setObjectName('profile-popup-avatar')
         try:
-            assets_dir = Path(__file__).resolve().parents[1] / "public" / "img"
-            # Only use an explicit user-provided avatar path (do not fall back to bundled placeholders)
-            candidate = avatar_src
-            if candidate:
-                candidate = Path(candidate)
-            if candidate and Path(candidate).exists():
-                pix = QPixmap(str(candidate)).scaled(48, 48, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
-                out = QPixmap(48, 48)
-                out.fill(Qt.GlobalColor.transparent)
-                painter = QPainter(out)
-                try:
-                    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-                    pathp = QPainterPath()
-                    pathp.addEllipse(0, 0, 48, 48)
-                    painter.setClipPath(pathp)
-                    painter.drawPixmap(0, 0, pix)
-                finally:
-                    painter.end()
-                avatar_lbl.setPixmap(out)
-                avatar_lbl.setStyleSheet('border-radius: 24px; background: transparent;')
+            if self.profile_avatar_url:
+                from urllib.request import urlopen
+                from PySide6.QtCore import QByteArray
+                img_data = urlopen(self.profile_avatar_url).read()
+                pix = QPixmap()
+                pix.loadFromData(QByteArray(img_data))
+                if not pix.isNull():
+                    pix = pix.scaled(48, 48, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
+                    out = QPixmap(48, 48)
+                    out.fill(Qt.GlobalColor.transparent)
+                    painter = QPainter(out)
+                    try:
+                        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+                        pathp = QPainterPath()
+                        pathp.addEllipse(0, 0, 48, 48)
+                        painter.setClipPath(pathp)
+                        painter.drawPixmap(0, 0, pix)
+                    finally:
+                        painter.end()
+                    avatar_lbl.setPixmap(out)
+                    avatar_lbl.setStyleSheet('border-radius: 24px; background: transparent;')
+                else:
+                    raise Exception("invalid pixmap")
             else:
-                # Fallback to initial letter blue circle
-                initial = (self.profile_display_name[:1] or 'U').upper()
-                avatar_lbl.setText(initial)
-                avatar_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                avatar_lbl.setFixedSize(48, 48)
-                avatar_lbl.setStyleSheet('background:#2b7bf6; color:#fff; border-radius:24px; font-weight:800; font-size:18px;')
-                f = avatar_lbl.font()
-                f.setPointSize(18)
-                try:
-                    f.setWeight(QFont.Weight.DemiBold)
-                except Exception:
-                    f.setWeight(QFont.Weight.Bold)
-                avatar_lbl.setFont(f)
+                raise Exception("no avatar url")
         except Exception:
             initial = (self.profile_display_name[:1] or 'U').upper()
             avatar_lbl.setText(initial)
@@ -4241,13 +4246,13 @@ class MainWindow(QMainWindow):
         # Upgrade (opens billing/upgrade page)
         def _open_upgrade():
             try:
-                QDesktopServices.openUrl(QUrl('https://formulite.vercel.app/pricing'))
+                QDesktopServices.openUrl(QUrl('http://localhost:3000/profile?tab=subscription'))
             except Exception:
                 pass
 
         def _open_profile():
             try:
-                QDesktopServices.openUrl(QUrl('https://formulite.vercel.app/profile'))
+                QDesktopServices.openUrl(QUrl('http://localhost:3000/profile'))
             except Exception:
                 pass
 
