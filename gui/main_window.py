@@ -333,6 +333,25 @@ class ScriptWorker(QThread):
 
 
 class MainWindow(QMainWindow):
+    def on_theme_toggle(self):
+        """Toggle between light and dark themes, persist the change."""
+        new_theme = "dark" if not self.dark_mode else "light"
+        self.set_theme(new_theme)
+
+    def set_theme(self, theme: str) -> None:
+        """Set the current theme, apply styles, and persist immediately."""
+        if theme not in ("light", "dark"):
+            return
+        self.dark_mode = theme == "dark"
+        self._theme_name = theme
+        self._apply_styles()
+        # Persist theme change immediately
+        try:
+            self._persist_chats()
+        except Exception as e:
+            print(f"[Theme] Failed to persist theme: {e}")
+            
+            
     def _export_chats(self) -> None:
         """Export all chats to a JSON file with enhanced dialog design."""
         from PySide6.QtWidgets import QFileDialog, QDialog, QVBoxLayout, QLabel, QPushButton
@@ -477,7 +496,6 @@ class MainWindow(QMainWindow):
                 # HWP not running
                 self.hwp_filename_label.setText("HWP not running")
             
-            print(f"[MainWindow] HWP state updated: {display_text}")
         except Exception as e:
             print(f"[MainWindow] Error updating HWP state: {e}")
     def __init__(self) -> None:
@@ -495,6 +513,7 @@ class MainWindow(QMainWindow):
         self.ai_workers: list[AIWorker] = []  # List of active AI workers
         # Default to light theme (pure white background)
         self.dark_mode = False
+        self._theme_name = "light"
         self.chatgpt = ChatGPTHelper()  # Legacy support
         self.ai_helper = MultiModelAIHelper()  # New multi-model helper
         self.current_model = self.ai_helper.get_cheapest_model() or "gpt-5-nano"  # Default to cheapest
@@ -535,6 +554,7 @@ class MainWindow(QMainWindow):
         
         self._build_ui()
         self._apply_styles()
+        # Save theme on change (connect to your theme toggle if needed)
         # Load persisted state (e.g., selected model) from disk and apply
         try:
             self._load_persisted_state()
@@ -679,7 +699,12 @@ class MainWindow(QMainWindow):
             folder = Path.home() / "formulite_chats"
             folder.mkdir(parents=True, exist_ok=True)
             file_path = folder / "chat_history.json"
-            data = {"chats": self._chats, "current": self._current_chat_id, "model": getattr(self, '_current_model', None)}
+            data = {
+                "chats": self._chats,
+                "current": self._current_chat_id,
+                "model": getattr(self, '_current_model', None),
+                "theme": "dark" if getattr(self, 'dark_mode', False) else "light"
+            }
             file_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception as e:
             print(f"[Persist] Failed to write chats: {e}")
@@ -718,8 +743,16 @@ class MainWindow(QMainWindow):
                 try:
                     self._set_model(str(model))
                     print(f"[Persist] Model set to: {model}")
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"[Persist] Failed to set model: {e}")
+
+            # Load theme if present
+            theme = data.get("theme")
+            if theme:
+                self.dark_mode = theme == "dark"
+                self._theme_name = theme
+                self._apply_styles()
+                print(f"[Persist] Theme set to: {theme}")
             # Restore messages for the current chat if available
             if self._current_chat_id:
                 for chat in self._chats:

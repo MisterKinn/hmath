@@ -1,3 +1,23 @@
+QToolButton#drawer-close-btn {
+    color: #e8e8e8;
+    font-size: 20px;
+    border: none;
+    background: transparent;
+}
+QWidget#sidebar-content {
+    padding-left: 12px;
+    padding-right: 12px;
+}
+/* Profile section background fix - force all backgrounds transparent */
+QWidget#drawer-profile-wrap QLabel,
+QWidget#drawer-profile-wrap QToolButton,
+QWidget#drawer-profile-wrap QFrame,
+QWidget#drawer-profile-wrap QWidget {
+    background: transparent !important;
+    background-color: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+}
 /* Hide checkmark for all possible Qt widgets */
 QMenu::indicator,
 QListView::indicator,
@@ -38,8 +58,8 @@ QWidget#model-dropdown, QFrame#model-dropdown {
 
 /* Style for model selection dropdown items */
 QWidget.model-item-selected, QLabel.model-item-selected, QPushButton.model-item-selected {
-    background: #f6f7f9 !important; /* matches screenshot */
-    color: #222 !important;
+    background: #232323 !important;
+    color: #e8e8e8 !important;
     border-radius: 6px;
     border: none !important;
     outline: none !important;
@@ -126,7 +146,15 @@ QPushButton#drawer-action:hover { background-color: #1a1a1a; }
 
 QLabel#drawer-section-title { color: #9ca3af; font-weight: 700; margin-left: 6px; margin-top: 6px; }
 
-QWidget#drawer-profile-wrap { border-top: 1px solid #000000; padding-top: 12px; }
+QWidget#drawer-profile-wrap {
+    border-top: 1px solid #22242a;
+    padding-top: 12px;
+    transition: background 0.2s;
+}
+QWidget#drawer-profile-wrap:hover {
+    background-color: #232323;
+    border-radius: 8px;
+}
 QFrame#drawer-divider { border: none; background: transparent; }
 
 QLabel#drawer-avatar { background-color: #2b7bf6; color: #ffffff; border-radius: 20px; font-weight: 800; font-size: 16px; }

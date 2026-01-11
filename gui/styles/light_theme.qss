@@ -391,6 +391,16 @@ QFrame#profile-popup QLabel { color: #0f1724; }
 QWidget#profile-popup-row { background: transparent; border: none; }
 QFrame#profile-popup { padding: 8px; }
 
+/* Profile section background fix - force all backgrounds transparent */
+QWidget#drawer-profile-wrap QLabel,
+QWidget#drawer-profile-wrap QToolButton,
+QWidget#drawer-profile-wrap QFrame,
+QWidget#drawer-profile-wrap QWidget {
+    background: transparent !important;
+    background-color: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+}
 QFrame#composer-pill, QWidget#script-input-container {
     background-color: #f4f4f4;
     border: 1px solid #e5e7eb;
@@ -529,5 +539,6 @@ QWidget.model-item, QLabel.model-item, QPushButton.model-item {
     color: #222;
 }
 
-=======
->>>>>>> parent of 6baf929 (Add hwp file recognition feature)
+QWidget#drawer-profile-wrap QLabel, QWidget#drawer-profile-wrap QToolButton {
+    background: transparent !important;
+}
