@@ -16,8 +16,7 @@ QWidget#drawer-profile-wrap QWidget {
     background: transparent !important;
     background-color: transparent !important;
     border: none !important;
-    box-shadow: none !important;
-}
+} 
 /* Hide checkmark for all possible Qt widgets */
 QMenu::indicator,
 QListView::indicator,
@@ -47,7 +46,6 @@ QMenu::item:selected:!active, QMenu::item:checked {
     color: #222 !important;
     border: none !important;
     outline: none !important;
-    box-shadow: none !important;
     image: none !important;
 }
 /* Remove border from model selection parent */
@@ -63,8 +61,7 @@ QWidget.model-item-selected, QLabel.model-item-selected, QPushButton.model-item-
     border-radius: 6px;
     border: none !important;
     outline: none !important;
-    box-shadow: none !important;
-}
+} 
 
 /* Remove checkmark for selected model (if using QMenu/QListView/QComboBox) */
 QMenu::item:selected:!active, QMenu::item:checked {
@@ -72,14 +69,14 @@ QMenu::item:selected:!active, QMenu::item:checked {
     color: #222 !important;
     border: none !important;
     outline: none !important;
-    box-shadow: none !important;
     image: none !important;
 }
 #hwp-filename-text {
-    color: white;
-    font-size: 16px;
+    font-size: 13px;
     font-weight: 600;
-}
+    min-height: 37px;
+    padding: 4px 10px;
+} 
 QWidget {
     background-color: #000000;
     color: #e8e8e8;
@@ -362,11 +359,11 @@ QPushButton#upload-button {
     color: #e8e8e8;
     font-size: 18px;
     font-weight: 500;
-    min-width: 44px;
-    min-height: 44px;
-    max-width: 44px;
-    max-height: 44px;
-}
+    min-width: 37px;
+    min-height: 37px;
+    max-width: 37px;
+    max-height: 37px;
+}  
 
 QPushButton#upload-button:hover {
     background-color: #2a2a2a;

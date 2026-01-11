@@ -30,7 +30,6 @@ body.dark-mode h2 {
     border-left: 4px solid #dc3545;
     padding: 20px;
     border-radius: 12px;
-    box-shadow: 0 4px 12px rgba(220, 53, 69, 0.1);
 }
 
 body.dark-mode .error-container {
@@ -78,7 +77,6 @@ body.dark-mode .error-message {
     border-left: 4px solid #5377f6;
     padding: 20px;
     border-radius: 12px;
-    box-shadow: 0 4px 12px rgba(83, 119, 246, 0.1);
 }
 
 body.dark-mode .info-container {
@@ -126,13 +124,11 @@ body.dark-mode .info-message {
     padding: 16px 20px;
     margin: 16px 0;
     border-radius: 8px;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
 }
 
 body.dark-mode .step {
     background: linear-gradient(135deg, #2a2a2a 0%, #1a1a1a 100%);
     border-left-color: #5377f6;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 
 .step-num {

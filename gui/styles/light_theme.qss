@@ -27,24 +27,22 @@ QMenu::item:selected:!active, QMenu::item:checked {
     color: #222 !important;
     border: none !important;
     outline: none !important;
-    box-shadow: none !important;
     image: none !important;
 }
 #hwp-filename-text {
     background: transparent;
-    padding: 4px 8px;
-    color: black;
-    font-size: 16px;
+    padding: 4px 10px;
+    font-size: 13px;
     font-weight: 600;
-}
+    min-height: 37px;
+}  
 
 /* Aggressively remove all borders, outlines, and shadows from QMenu and its items */
 QMenu, QMenu::item, QMenu::indicator {
     border: none !important;
     outline: none !important;
-    box-shadow: none !important;
     background: transparent;
-}
+} 
 QWidget {
     background-color: #ffffff;
     color: #2c2c2c;
@@ -133,8 +131,7 @@ QPushButton#help-button:pressed {
     border: 1px solid #e5e7eb;
     border-radius: 22px;
     padding: 16px;
-    box-shadow: 0 6px 18px rgba(0,0,0,0.06);
-}
+} 
 
 QTextEdit#script-editor {
     background-color: transparent;
@@ -198,10 +195,10 @@ QPushButton#upload-button {
     color: #666666;
     font-size: 18px;
     font-weight: 500;
-    min-width: 44px;
-    min-height: 44px;
-    max-width: 44px;
-    max-height: 44px;
+    min-width: 37px;
+    min-height: 37px;
+    max-width: 37px;
+    max-height: 37px;
 }
 
 QPushButton#upload-button:hover {
@@ -399,8 +396,7 @@ QWidget#drawer-profile-wrap QWidget {
     background: transparent !important;
     background-color: transparent !important;
     border: none !important;
-    box-shadow: none !important;
-}
+} 
 QFrame#composer-pill, QWidget#script-input-container {
     background-color: #f4f4f4;
     border: 1px solid #e5e7eb;
@@ -520,8 +516,7 @@ QWidget.model-item-selected, QLabel.model-item-selected, QPushButton.model-item-
     border-radius: 6px;
     border: none !important;
     outline: none !important;
-    box-shadow: none !important;
-}
+} 
 
 /* Remove checkmark for selected model (if using QMenu/QListView/QComboBox) */
 QMenu::item:selected:!active, QMenu::item:checked {
@@ -529,7 +524,6 @@ QMenu::item:selected:!active, QMenu::item:checked {
     color: #222 !important;
     border: none !important;
     outline: none !important;
-    box-shadow: none !important;
     image: none !important;
 }
 

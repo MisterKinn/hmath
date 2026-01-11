@@ -197,28 +197,16 @@ def apply_help_button_style(window) -> None:
         if btn:
             btn.setStyleSheet(help_style)
 
-    # HWP label button
-    hwp_bg = hover_bg
-    hwp_border = hover_border
-    hwp_style = f"""
-    QPushButton {{
-        background-color: {hwp_bg};
-        color: {text_color};
-        border: 1px solid {hwp_border};
-        border-radius: 12px;
-        padding: 6px 12px;
+    # HWP filename display: text-only label (no pill/border) — force color to #B7B7B7 regardless of theme
+    hwp_style = """
+    QLabel#hwp-filename-text {
+        background: transparent;
+        border: none;
+        padding: 0px;
         font-weight: 700;
         font-size: 13px;
-        text-align: center;
-    }}
-    QPushButton:hover {{
-        background-color: {hwp_bg};
-        border: 1px solid {hwp_border};
-    }}
-    QPushButton:pressed {{
-        background-color: {press_bg};
-        border: 1px solid {press_border};
-    }}
+        color: #B7B7B7;
+    }
     """
     if getattr(window, "hwp_filename_label", None):
         window.hwp_filename_label.setStyleSheet(hwp_style)
@@ -236,18 +224,18 @@ def apply_help_button_style(window) -> None:
         max-height: 44px;
         font-weight: 700;
         font-size: 26px;
-        box-shadow: none !important;
+
         outline: none !important;
     }}
     QPushButton#composer-send:hover {{
         background-color: #ececf1;
         border: none !important;
-        box-shadow: none !important;
+
     }}
     QPushButton#composer-send:pressed {{
         background-color: #e5e7eb;
         border: none !important;
-        box-shadow: none !important;
+
     }}
     """
     if getattr(window, "run_button", None):
@@ -313,19 +301,34 @@ def get_icon_path(icon_key: str, dark_mode: bool, use_theme: bool = True) -> Opt
     theme_suffix = "dark" if dark_mode else "light"
 
     if use_theme:
-        # Prefer explicit "-icon" or "-icon-<theme>" variants, then theme-specific svg/pngs, then generic names
-        candidates = [
-            f"{icon_key}-icon-{theme_suffix}.png",
-            f"{icon_key}-icon-{theme_suffix}.svg",
-            f"{icon_key}-icon.png",
-            f"{icon_key}-icon.svg",
-            f"{icon_key}-{theme_suffix}.svg",
-            f"{icon_key}_{theme_suffix}.svg",
-            f"{icon_key}.svg",
-            f"{icon_key}-{theme_suffix}.png",
-            f"{icon_key}_{theme_suffix}.png",
-            f"{icon_key}.png",
-        ]
+        # For certain common icons prefer a single generic asset so icons stay identical across themes
+        if icon_key in ("add", "mic", "send"):
+            candidates = [
+                f"{icon_key}.svg",
+                f"{icon_key}.png",
+                f"{icon_key}-{theme_suffix}.svg",
+                f"{icon_key}_{theme_suffix}.svg",
+                f"{icon_key}-{theme_suffix}.png",
+                f"{icon_key}_{theme_suffix}.png",
+                f"{icon_key}-icon-{theme_suffix}.png",
+                f"{icon_key}-icon-{theme_suffix}.svg",
+                f"{icon_key}-icon.png",
+                f"{icon_key}-icon.svg",
+            ]
+        else:
+            # Prefer explicit "-icon" or "-icon-<theme>" variants, then theme-specific svg/pngs, then generic names
+            candidates = [
+                f"{icon_key}-icon-{theme_suffix}.png",
+                f"{icon_key}-icon-{theme_suffix}.svg",
+                f"{icon_key}-icon.png",
+                f"{icon_key}-icon.svg",
+                f"{icon_key}-{theme_suffix}.svg",
+                f"{icon_key}_{theme_suffix}.svg",
+                f"{icon_key}.svg",
+                f"{icon_key}-{theme_suffix}.png",
+                f"{icon_key}_{theme_suffix}.png",
+                f"{icon_key}.png",
+            ]
         if not dark_mode:
             candidates = [
                 f"{icon_key}_black.png",
