@@ -22,6 +22,69 @@ def load_theme(theme_name: str) -> str:
     return ""
 
 
+def load_high_dpi_pixmap(path: str | Path, logical_size: int) -> QPixmap | None:
+    """Load an image at device pixels and return a QPixmap scaled to logical_size x logical_size.
+
+    This prefers using QIcon.pixmap (good for SVGs/vector assets), requests
+    a pixmap at devicePixelRatio, sets the pixmap's devicePixelRatio, and
+    performs a smooth downscale to the requested logical size.
+    """
+    try:
+        screen = QApplication.primaryScreen()
+        dpr = float(getattr(screen, "devicePixelRatio", lambda: 1)() or 1.0)
+    except Exception:
+        dpr = 1.0
+    pixel_size = max(1, int(round(logical_size * dpr)))
+    try:
+        icon = QIcon(str(path))
+        pix = icon.pixmap(QSize(pixel_size, pixel_size))
+        if not pix.isNull():
+            try:
+                pix.setDevicePixelRatio(dpr)
+            except Exception:
+                pass
+            # If the pixmap was created at device pixel size, scale down to logical size
+            return pix.scaled(logical_size, logical_size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+    except Exception:
+        pass
+
+    # Fallback to QPixmap
+    try:
+        pix = QPixmap(str(path))
+        if not pix.isNull():
+            try:
+                pix.setDevicePixelRatio(dpr)
+            except Exception:
+                pass
+            return pix.scaled(logical_size, logical_size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+    except Exception:
+        pass
+    return None
+
+
+def adjust_pixmap_for_high_dpi(pix: QPixmap, logical_size: int) -> QPixmap:
+    """Set devicePixelRatio for an existing pixmap so it renders crisply on HiDPI displays.
+
+    If the pixmap contains pixel data at higher resolution, this sets its
+devicePixelRatio to match the screen so Qt will draw it sharply.
+    """
+    try:
+        screen = QApplication.primaryScreen()
+        dpr = float(getattr(screen, "devicePixelRatio", lambda: 1)() or 1.0)
+    except Exception:
+        dpr = 1.0
+    try:
+        pix.setDevicePixelRatio(dpr)
+    except Exception:
+        pass
+    # Ensure size is correct for logical_size (keep aspect ratio)
+    try:
+        pix = pix.scaled(logical_size, logical_size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+    except Exception:
+        pass
+    return pix
+
+
 def create_styled_dialog(parent, title: str, content: str, min_width: int = 500, min_height: int = 0, dark_mode: bool = False, icon_path: str | None = None) -> QMessageBox:
     """Create a styled dialog used by the app (ported from MainWindow)."""
     css = load_dialog_css()
@@ -34,9 +97,15 @@ def create_styled_dialog(parent, title: str, content: str, min_width: int = 500,
     msg.setTextFormat(Qt.RichText)
     msg.setText(full_html)
     if icon_path:
-        pix = QPixmap(icon_path)
-        if not pix.isNull():
-            msg.setIconPixmap(pix.scaled(48, 48))
+        # Use shared high-DPI loader so dialog icons match other UI icons
+        # Make error icons larger for greater prominence
+        try:
+            logical_size = 64 if "error" in str(icon_path).lower() else 48
+        except Exception:
+            logical_size = 48
+        pix = load_high_dpi_pixmap(icon_path, logical_size)
+        if pix is not None and not pix.isNull():
+            msg.setIconPixmap(pix)
         else:
             msg.setIcon(QMessageBox.Icon.NoIcon)
     else:
@@ -216,10 +285,18 @@ def set_material_symbol_icon(widget, ligature: str, px: int, material_symbols_av
 
 def render_material_symbol_icon(ligature: str, px: int, color: QColor) -> QIcon:
     font = QFont("Material Symbols Outlined")
-    font.setPixelSize(px)
+    # Respect device pixel ratio so icons remain crisp on HiDPI displays
+    try:
+        screen = QApplication.primaryScreen()
+        dpr = float(getattr(screen, "devicePixelRatio", lambda: 1)() or 1.0)
+    except Exception:
+        dpr = 1.0
+    pixel_px = max(1, int(round(px * dpr)))
+    font.setPixelSize(pixel_px)
     font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
 
-    pm = QPixmap(px, px)
+    pm = QPixmap(pixel_px, pixel_px)
+    pm.setDevicePixelRatio(dpr)
     pm.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pm)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)

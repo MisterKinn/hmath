@@ -56,15 +56,37 @@ class MultiModelAIHelper:
             api_keys: Dict of API keys with model names as keys. 
                      If not provided, will try to get from env vars or .env file.
         """
-        # Load .env file from project root
+        # Load .env file from likely locations (project root, cwd, bundled resources)
         if load_dotenv is not None:
-            env_path = Path(__file__).resolve().parents[1] / ".env"
-            print(f"[MultiModelAI] Looking for .env at: {env_path}")
-            if env_path.exists():
-                print(f"[MultiModelAI] .env file found!")
-                load_dotenv(dotenv_path=env_path)
+            import sys
+
+            candidates = [
+                Path(__file__).resolve().parents[1] / ".env",  # project root
+                Path.cwd() / ".env",  # current working directory
+            ]
+            # PyInstaller onefile temporary folder
+            meipass = getattr(sys, "_MEIPASS", None)
+            if meipass:
+                candidates.append(Path(meipass) / ".env")
+            # macOS .app Contents/Resources (when bundled as a .app)
+            try:
+                exe = Path(sys.executable).resolve()
+                candidates.append(exe.parents[1] / "Resources" / ".env")
+            except Exception:
+                pass
+
+            found = None
+            for p in candidates:
+                print(f"[MultiModelAI] Checking for .env at: {p}")
+                if p.exists():
+                    found = p
+                    break
+
+            if found:
+                print(f"[MultiModelAI] .env file found at: {found}")
+                load_dotenv(dotenv_path=found)
             else:
-                print(f"[MultiModelAI] .env file not found at {env_path}")
+                print("[MultiModelAI] .env file not found in candidates, skipping .env")
         else:
             print("[MultiModelAI] python-dotenv not installed, skipping .env file")
         
@@ -185,7 +207,7 @@ class MultiModelAIHelper:
             if file_path.suffix.lower() == '.pdf':
                 print(f"[MultiModelAI] Converting PDF to image...")
                 try:
-                    from pdf2image import convert_from_path
+                    from pdf2image import convert_from_path  # type: ignore[import]
                     images = convert_from_path(image_path, first_page=1, last_page=1)
                     if images:
                         import io
@@ -329,7 +351,7 @@ class MultiModelAIHelper:
             
             if image_path:
                 # Vision request - Gemini can take image file directly
-                from PIL import Image
+                from PIL import Image  # type: ignore[import]
                 img = Image.open(image_path)
                 print(f"[MultiModelAI] Gemini processing image with prompt length: {len(prompt)}")
                 response = self.gemini_model.generate_content([prompt, img])
@@ -390,8 +412,8 @@ class MultiModelAIHelper:
         """Extract text from image using pytesseract OCR."""
         print(f"[MultiModelAI] [OCR] Starting OCR extraction for image: {image_path}")
         try:
-            from PIL import Image
-            import pytesseract
+            from PIL import Image  # type: ignore[import]
+            import pytesseract  # type: ignore[import]
             img = Image.open(image_path)
             print(f"[MultiModelAI] [OCR] Image loaded successfully.")
             text = pytesseract.image_to_string(img, lang='eng+kor')

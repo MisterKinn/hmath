@@ -14,9 +14,9 @@ try:
 except ImportError:  # pragma: no cover - optional dependency
     sr = None  # type: ignore[assignment]
 
-from PySide6.QtCore import Qt, Signal, QThread, QObject, QSize, QTimer, QPropertyAnimation, QEasingCurve, QPoint, QUrl, QRect
-from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap, QTextCursor, QDesktopServices, QCursor, QPen, QPainterPath, QImage
-from PySide6.QtWidgets import (
+from PySide6.QtCore import Qt, Signal, QThread, QObject, QSize, QTimer, QPropertyAnimation, QEasingCurve, QPoint, QUrl, QRect  # type: ignore[import-not-found]
+from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap, QTextCursor, QDesktopServices, QCursor, QPen, QPainterPath, QImage  # type: ignore[import-not-found]
+from PySide6.QtWidgets import (  # type: ignore[import-not-found]
     QApplication,
     QDialog,
     QFrame,
@@ -304,7 +304,7 @@ class MainWindow(QMainWindow):
             
     def _export_chats(self) -> None:
         """Export all chats to a JSON file with enhanced dialog design."""
-        from PySide6.QtWidgets import QFileDialog, QDialog, QVBoxLayout, QLabel, QPushButton
+        from PySide6.QtWidgets import QFileDialog, QDialog, QVBoxLayout, QLabel, QPushButton  # type: ignore[import-not-found]
         import json
         file_path, _ = QFileDialog.getSaveFileName(self, "채팅 내보내기", "", "JSON Files (*.json);;All Files (*)")
         if file_path:
@@ -334,12 +334,12 @@ class MainWindow(QMainWindow):
                 layout.addWidget(ok_btn, alignment=Qt.AlignmentFlag.AlignCenter)
                 dlg.exec()
             except Exception as e:
-                from PySide6.QtWidgets import QMessageBox
+                from PySide6.QtWidgets import QMessageBox  # type: ignore[import-not-found]
                 QMessageBox.critical(self, "내보내기 오류", f"채팅 내보내기에 실패했습니다.\n{e}")
 
     def _import_chats(self) -> None:
         """Import chats from a JSON file with enhanced dialog design."""
-        from PySide6.QtWidgets import QFileDialog, QDialog, QVBoxLayout, QLabel, QPushButton, QMessageBox
+        from PySide6.QtWidgets import QFileDialog, QDialog, QVBoxLayout, QLabel, QPushButton, QMessageBox  # type: ignore[import-not-found]
         import json
         file_path, _ = QFileDialog.getOpenFileName(self, "채팅 가져오기", "", "JSON Files (*.json);;All Files (*)")
         if file_path:
@@ -1496,6 +1496,10 @@ class MainWindow(QMainWindow):
                         pass
 
                 processed = processed.scaled(size_px, size_px, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                try:
+                    processed = design.adjust_pixmap_for_high_dpi(processed, size_px)
+                except Exception:
+                    pass
                 self.drawer_toggle_btn.setIcon(QIcon(processed))
                 self.drawer_toggle_btn.setIconSize(QSize(size_px, size_px))
             else:
@@ -2240,7 +2244,7 @@ class MainWindow(QMainWindow):
         try:
             if self.profile_avatar_url:
                 from urllib.request import urlopen
-                from PySide6.QtCore import QByteArray
+                from PySide6.QtCore import QByteArray  # type: ignore[import-not-found]
                 img_data = urlopen(self.profile_avatar_url).read()
                 pix = QPixmap()
                 pix.loadFromData(QByteArray(img_data))
@@ -2257,6 +2261,10 @@ class MainWindow(QMainWindow):
                         painter.drawPixmap(0, 0, pix)
                     finally:
                         painter.end()
+                    try:
+                        out = design.adjust_pixmap_for_high_dpi(out, 48)
+                    except Exception:
+                        pass
                     avatar.setPixmap(out)
                     avatar.setFixedSize(48, 48)
                     avatar.setStyleSheet("border-radius: 24px; background: transparent;")
@@ -2424,7 +2432,7 @@ class MainWindow(QMainWindow):
           but outside the popup, hide the popup and allow the event to continue (do not swallow it).
         """
         try:
-            from PySide6.QtCore import QEvent
+            from PySide6.QtCore import QEvent  # type: ignore[import-not-found]
             if event.type() == QEvent.Type.MouseButtonPress:
                 if getattr(self, '_drawer_popup', None) and getattr(self, 'drawer_panel', None) and self._drawer_popup.isVisible():
                     # Get global click position (Qt6: globalPosition returns QPointF)
@@ -3523,8 +3531,8 @@ class MainWindow(QMainWindow):
     def _add_image_preview(self, file_path: str) -> None:
         """Add image preview thumbnail with remove button at top-right corner."""
         try:
-            pixmap = QPixmap(file_path)
-            if not pixmap.isNull():
+            pixmap = design.load_high_dpi_pixmap(file_path, 120)
+            if pixmap is not None and not pixmap.isNull():
                 # Create container for preview
                 preview_container = QFrame()
                 preview_container.setObjectName("image-preview-item")
@@ -3939,7 +3947,7 @@ class MainWindow(QMainWindow):
         try:
             if self.profile_avatar_url:
                 from urllib.request import urlopen
-                from PySide6.QtCore import QByteArray
+                from PySide6.QtCore import QByteArray  # type: ignore[import-not-found]
                 img_data = urlopen(self.profile_avatar_url).read()
                 pix = QPixmap()
                 pix.loadFromData(QByteArray(img_data))
@@ -3956,6 +3964,10 @@ class MainWindow(QMainWindow):
                         painter.drawPixmap(0, 0, pix)
                     finally:
                         painter.end()
+                    try:
+                        out = design.adjust_pixmap_for_high_dpi(out, 48)
+                    except Exception:
+                        pass
                     avatar_lbl.setPixmap(out)
                     avatar_lbl.setStyleSheet('border-radius: 24px; background: transparent;')
                 else:
@@ -4050,21 +4062,22 @@ class MainWindow(QMainWindow):
                             break
 
                     pix = None
+                    # Prefer HiDPI-aware loading for local and themed assets
+                    pix = None
                     if candidate:
-                        pix = QPixmap(str(candidate))
+                        pix = design.load_high_dpi_pixmap(candidate, sz)
                     else:
                         # fallback to themed resolver (checks icon-key-light/dark variants)
                         icon_path = design.get_icon_path(key, False, use_theme=True)
                         if icon_path:
-                            pix = QPixmap(str(icon_path))
+                            pix = design.load_high_dpi_pixmap(icon_path, sz)
                         else:
                             # last resort: try without theme
                             icon_path = self._get_icon_path_str(key)
                             if icon_path:
-                                pix = QPixmap(icon_path)
+                                pix = design.load_high_dpi_pixmap(icon_path, sz)
 
                     if pix and not pix.isNull():
-                        pix = pix.scaled(sz, sz, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
                         if tint_black:
                             # choose tint color depending on current theme: black for light mode, light gray for dark mode
                             tint_color = QColor(0, 0, 0) if not self.dark_mode else QColor(255, 255, 255)
@@ -4136,10 +4149,10 @@ class MainWindow(QMainWindow):
                         if fb.exists():
                             # Use 22px for 'light' and 'logout' icons, else 20px
                             sz = 22 if icon_key in ('light', 'logout') else 20
-                            fb_pix = QPixmap(str(fb)).scaled(sz, sz, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                            fb_pix = design.load_high_dpi_pixmap(fb, sz)
                             # Tint fallback to white in dark mode as well
                             try:
-                                if self.dark_mode:
+                                if self.dark_mode and fb_pix is not None:
                                     out = QPixmap(fb_pix.size())
                                     out.fill(Qt.GlobalColor.transparent)
                                     p = QPainter(out)
@@ -4153,7 +4166,8 @@ class MainWindow(QMainWindow):
                                     fb_pix = out
                             except Exception:
                                 pass
-                            ic.setPixmap(fb_pix)
+                            if fb_pix is not None:
+                                ic.setPixmap(fb_pix)
                         else:
                             ic.setStyleSheet('background: transparent; margin-left: 8px; margin-top: 2px;')
                     except Exception:
@@ -5158,11 +5172,11 @@ class MainWindow(QMainWindow):
     </div>
 </div>
 """
-        from PySide6.QtWidgets import QDialog, QVBoxLayout, QPushButton, QLabel
+        from PySide6.QtWidgets import QDialog, QVBoxLayout, QPushButton, QLabel  # type: ignore[import-not-found]
         dlg = QDialog(self)
         dlg.setWindowTitle("설정")
         dlg.setMinimumWidth(420)
-        from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QWidget
+        from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QWidget  # type: ignore[import-not-found]
         dlg = QDialog(self)
         dlg.setWindowTitle("설정")
         dlg.setMinimumWidth(420)
@@ -6220,11 +6234,11 @@ class MainWindow(QMainWindow):
             if anchor_btn is not None:
                 menu.exec(anchor_btn.mapToGlobal(anchor_btn.rect().bottomLeft()))
             else:
-                from PySide6.QtGui import QCursor
+                from PySide6.QtGui import QCursor  # type: ignore[import-not-found]
                 menu.exec(QCursor.pos())
         except Exception:
             try:
-                from PySide6.QtGui import QCursor
+                from PySide6.QtGui import QCursor  # type: ignore[import-not-found]
                 menu.exec(QCursor.pos())
             except Exception:
                 # Last-resort: show in the center of the main window

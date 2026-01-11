@@ -1,0 +1,31 @@
+# macOS Build Requirements for Formulite
+# Install with: pip install -r requirements-build.txt
+
+# Core build tools
+pyinstaller>=5.0.0
+setuptools>=65.0.0
+
+# GUI Framework
+PySide6>=6.5.0
+
+# Image processing (for DMG background creation)
+Pillow>=9.0.0
+
+# Optional dependencies (include if used in your app)
+requests>=2.28.0
+certifi>=2022.0.0
+
+# Speech recognition (optional)
+SpeechRecognition>=3.10.0
+pyaudio>=0.2.11
+
+# AI/ML services (optional, include if your app uses them)
+openai>=1.0.0
+anthropic>=0.7.0
+
+# Firebase/Cloud services (optional)
+firebase-admin>=6.0.0
+google-cloud-firestore>=2.7.0
+
+# Additional utilities
+packaging>=21.0
