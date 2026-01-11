@@ -41,6 +41,8 @@ pip-delete-this-directory.txt
 # GUI / EXE
 *.exe
 *.spec
+*.dmg
+*.pkg
 
 # OS
 .DS_Store

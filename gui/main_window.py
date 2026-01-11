@@ -1643,7 +1643,7 @@ class MainWindow(QMainWindow):
         # Natural language input field (changed from code editor to chat-like input)
         self.script_edit = FileDropTextEdit()
         self.script_edit.setObjectName("script-editor")
-        self.script_edit.setPlaceholderText("무엇을 하고 싶으신가요? (예: '수학 문제'라는 제목을 입력하고 이차방정식 공식을 삽입해줘)")
+        self.script_edit.setPlaceholderText("예: y=f(x) 수식과 근의 공식을 삽입해줘")
         self.script_edit.setPlainText("")  # Start with empty input
         # Smaller editor height to reduce overall input form height.
         self.script_edit.setMaximumHeight(220)
@@ -1826,7 +1826,7 @@ class MainWindow(QMainWindow):
         hero_layout.setContentsMargins(40, 0, 40, 0)
         hero_layout.setSpacing(0)
         hero_layout.addStretch(1)
-        hero_prompt = QLabel("무엇이든 입력하세요")
+        hero_prompt = QLabel("무엇이든 물어보세요")
         hero_prompt.setObjectName("hero-prompt")
         hero_prompt.setAlignment(Qt.AlignmentFlag.AlignCenter)
         cp_color = "#000000" if not self.dark_mode else "#ffffff"
@@ -7003,7 +7003,7 @@ class MainWindow(QMainWindow):
             row_lyt = QHBoxLayout(row)
             row_lyt.setContentsMargins(0, 0, 0, 0)
             row_lyt.setSpacing(0)
-            label = QLabel("'무엇이든 물어보세요'")
+            label = QLabel("무엇이든 물어보세요")
             label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             color = "#ffffff" if getattr(self, "dark_mode", False) else "#000000"
             label.setStyleSheet(f"font-size: 36px; color: {color}; font-weight: 800; margin: 32px 0;")
