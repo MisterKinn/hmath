@@ -108,14 +108,22 @@ PY
   file "$LDQ" || true
 fi
 
+# Optionally allow debug mode to stop early (skip linuxdeployqt)
+if [ "${DEBUG_BUILD:-0}" = "1" ]; then
+  echo "[build] DEBUG_BUILD=1; stopping before linuxdeployqt (debug mode)"
+  echo "[build] Done (debug mode)."
+  exit 0
+fi
+
 # Run linuxdeployqt to bundle Qt libs and create AppImage
 echo "[build] Running linuxdeployqt to produce AppImage (this may take a while)..."
 # Use the desktop file as the entrypoint
 set +e
 ./$LDQ "$APPDIR/usr/share/applications/formulite.desktop" -appimage
-if [ $? -ne 0 ]; then
-  echo "[build] linuxdeployqt failed, retrying with --appimage-extract-and-run..."
-  ./$LDQ --appimage-extract-and-run "$APPDIR/usr/share/applications/formulite.desktop" -appimage
+ret=$?
+if [ $ret -ne 0 ]; then
+  echo "[build] linuxdeployqt failed (exit $ret), retrying with --appimage-extract-and-run..."
+  ./$LDQ --appimage-extract-and-run "$APPDIR/usr/share/applications/formulite.desktop" -appimage || true
 fi
 set -e
 

@@ -30,6 +30,20 @@ jobs:
         python -m pip install --upgrade pip
         python -m pip install -r requirements.txt pyinstaller Pillow
 
+    - name: Run debug build (capture logs)
+      run: |
+        set -o pipefail
+        bash -x scripts/build_linux.sh 2>&1 | tee build_debug.log || true
+      env:
+        DEBUG_BUILD: 1
+
+    - name: Upload debug log
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-debug-log
+        path: build_debug.log
+
     - name: Build AppImage
       run: bash scripts/build_linux.sh
 
