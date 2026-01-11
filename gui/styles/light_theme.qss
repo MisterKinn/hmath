@@ -230,14 +230,14 @@ QPushButton#help-button {
 /* Hero heading and composer pill tweaks */
 QLabel#hero-prompt {
     font-size: 36px;
-    font-weight: 800;
+    font-weight: 700;
     color: #000000;
     margin-top: 8px;
 }
 
 /* Drawer / Sidebar styles to match FormuLite sidebar */
 QFrame#drawer { background-color: transparent; border-left: none; }
-QWidget#sidebar-content { border-right: 1px solid #e6e7eb; padding-right: 8px; }
+QWidget#sidebar-content { border-right: 1px solid #e6e7eb; padding-left: 12px; padding-right: 12px; }
 QWidget#drawer-header { padding-bottom: 6px; }
 
 /* Make the top navbar transparent so content shows behind it */
@@ -334,7 +334,7 @@ QPushButton#drawer-action {
 }
 QPushButton#drawer-action:hover { background-color: #f4f6f8; }
 
-QLabel#drawer-section-title { color: #9ca3af; font-weight: 700; margin-left: 6px; margin-top: 16px; }
+QLabel#drawer-section-title { color: #9ca3af; font-weight: 700; margin-left: 6px; margin-top: 6px; }
 
 /* Chat list items - compact */
 QWidget#drawer-chat-list QWidget#drawer-chat-item-wrap { padding: 0px 2px; }
@@ -344,7 +344,7 @@ QPushButton#drawer-chat-item {
     text-align: left;
     padding: 8px 8px;
     font-size: 14px;
-    font-weight: 700;
+    font-weight: 600;
     color: #0f1724;
     border-radius: 10px;
 }

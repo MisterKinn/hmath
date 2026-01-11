@@ -118,13 +118,13 @@ QPushButton#drawer-action {
     text-align: left;
     padding: 12px 10px;
     font-size: 16px;
-    font-weight: 800;
+    font-weight: 700;
     color: #e8e8e8;
     border-radius: 10px;
 }
 QPushButton#drawer-action:hover { background-color: #1a1a1a; }
 
-QLabel#drawer-section-title { color: #9ca3af; font-weight: 700; margin-left: 6px; margin-top: 16px; }
+QLabel#drawer-section-title { color: #9ca3af; font-weight: 700; margin-left: 6px; margin-top: 6px; }
 
 QWidget#drawer-profile-wrap { border-top: 1px solid #000000; padding-top: 12px; }
 QFrame#drawer-divider { border: none; background: transparent; }
@@ -139,7 +139,7 @@ QPushButton#drawer-chat-item {
     text-align: left;
     padding: 8px 8px 8px 8px;
     font-size: 14px;
-    font-weight: 700;
+    font-weight: 600;
     color: #e8e8e8;
     border-radius: 10px;
     /* min-height removed to allow smaller chat items */

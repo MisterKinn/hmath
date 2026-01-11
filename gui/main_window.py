@@ -779,7 +779,7 @@ class MainWindow(QMainWindow):
                 # Set fixed height to match QToolButtons and center text vertically
                 btn.setFixedHeight(28)
                 # Center text vertically using alignment
-                btn.setStyleSheet("text-align: left; qproperty-alignment: AlignVCenter;")
+                btn.setStyleSheet("text-align: left;")
 
                 font = btn.font()
                 font.setPointSize(14)
@@ -2056,31 +2056,30 @@ class MainWindow(QMainWindow):
         frame.setObjectName("sidebar-content")
         lyt = QVBoxLayout(frame)
         # Use compact margins so the sidebar content occupies top and bottom tightly
-        lyt.setContentsMargins(6, 6, 6, 6)
+        lyt.setContentsMargins(0, 6, 0, 6)  # Remove left/right padding, handled by QSS
         # Slight spacing for readable grouping
-        lyt.setSpacing(8)
+        lyt.setSpacing(4)  # Reduce sidebar section spacing
 
         # Header: title + close button
         header = QWidget()
         header.setObjectName("drawer-header")
         hl = QHBoxLayout(header)
-        # Match the left/top inset of drawer action buttons so the title lines up vertically/ horizontally
-        hl.setContentsMargins(12, 12, 12, 0)
+        # Remove right margin to allow close button to reach the edge
+        hl.setContentsMargins(12, 12, 0, 0)
         hl.setSpacing(8)
         title = QLabel("Nova AI")
         title.setObjectName("drawer-title")
-        title.setStyleSheet("font-weight:800; font-size:20px;")
+        title.setStyleSheet("font-weight:700; font-size:20px;")
         hl.addWidget(title, alignment=Qt.AlignmentFlag.AlignLeft)
         hl.addStretch()
         close_btn = QToolButton()
         close_btn.setObjectName("drawer-close-btn")
         close_btn.setAutoRaise(False)
-        close_btn.setFixedSize(36, 36)
+        close_btn.setFixedSize(44, 44)
         close_btn.setText("✕")
         close_btn.setToolTip("닫기")
         close_btn.clicked.connect(self._close_drawer)
-        # Keep close button at the far right
-        hl.addWidget(close_btn, alignment=Qt.AlignmentFlag.AlignRight)
+        hl.addWidget(close_btn)
         lyt.addWidget(header)
 
         # Primary actions (New Chat / Search)
@@ -2092,8 +2091,8 @@ class MainWindow(QMainWindow):
             btn.setMaximumHeight(40)
             btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             is_dark = self.dark_mode if hasattr(self, 'dark_mode') else False
-            text_color = "#fff" if is_dark else "#0f1724"
-            hover_bg = "#23272e" if is_dark else "#f4f6f8"
+            text_color = "#ffffff" if is_dark else "#000000"
+            hover_bg = "#222222" if is_dark else "#f4f6f8"
             style = f"""
                 QPushButton#drawer-action {{
                     background-color: {bg_color or 'transparent'};
@@ -2105,7 +2104,7 @@ class MainWindow(QMainWindow):
                     padding-left: 12px;
                     min-height: 20px;
                     max-height: 20px;
-                    qproperty-alignment: AlignVCenter;
+                    /* qproperty-alignment removed */
                 }}
                 QPushButton#drawer-action:hover {{
                     background-color: {hover_bg};
@@ -2128,8 +2127,8 @@ class MainWindow(QMainWindow):
         actions_wrap = QWidget()
         aw_lyt = QVBoxLayout(actions_wrap)
         aw_lyt.setContentsMargins(0, 0, 0, 0)
-        aw_lyt.setSpacing(0)
-        aw_lyt.addSpacing(24)  # Move new chat lower
+        aw_lyt.setSpacing(0)  # No extra gap between new chat/search
+        aw_lyt.addSpacing(10)  # Smaller gap above new chat
         aw_lyt.addWidget(self.drawer_new_chat_btn)
         aw_lyt.addSpacing(0)   # Reduce gap between buttons
         self.drawer_search_btn = make_drawer_button("채팅 검색", "search-light.svg", self._open_chat_search)
@@ -2168,7 +2167,7 @@ class MainWindow(QMainWindow):
         self.drawer_reset_btn = reset_btn
 
         # Add spacing between "내 채팅" and the chat list
-        lyt.addSpacing(12)
+        lyt.addSpacing(4)  # Reduce gap between '내 채팅' and chat list
 
         # Scrollable chat list
         scroll = QScrollArea()
@@ -2180,7 +2179,7 @@ class MainWindow(QMainWindow):
         v = QVBoxLayout(list_host)
         v.setContentsMargins(0, 0, 0, 0)
         # Add a small vertical gap between chat rows so their gray hover backgrounds don't touch
-        v.setSpacing(8)
+        v.setSpacing(4)  # Reduce gap between chat rows
         # Anchor items to the top so a short list doesn't vertically distribute items
         try:
             v.setAlignment(Qt.AlignmentFlag.AlignTop)
@@ -3142,6 +3141,36 @@ class MainWindow(QMainWindow):
         # Fallback: prefix text
         if fallback and not button.text().startswith(fallback):
             button.setText(f"{fallback} {button.text()}".strip())
+
+    def _refresh_drawer_button_styles(self) -> None:
+        """Refresh drawer button text colors after theme change."""
+        try:
+            if hasattr(self, 'drawer_new_chat_btn') and hasattr(self, 'drawer_search_btn'):
+                text_color = "#ffffff" if self.dark_mode else "#000000"
+                hover_bg = "#222222" if self.dark_mode else "#f4f6f8"
+                
+                style = f"""
+                    QPushButton#drawer-action {{
+                        background-color: transparent;
+                        border-radius: 8px;
+                        font-size: 15px;
+                        font-weight: 800;
+                        color: {text_color};
+                        text-align: left;
+                        padding-left: 12px;
+                        min-height: 20px;
+                        max-height: 20px;
+                    }}
+                    QPushButton#drawer-action:hover {{
+                        background-color: {hover_bg};
+                        border-radius: 8px;
+                    }}
+                """
+                
+                self.drawer_new_chat_btn.setStyleSheet(style)
+                self.drawer_search_btn.setStyleSheet(style)
+        except Exception:
+            pass
 
     def _refresh_icons(self) -> None:
         """Reapply themed icons after a theme change."""
@@ -4547,6 +4576,7 @@ class MainWindow(QMainWindow):
         self.dark_mode = checked
         self._apply_styles()
         self._refresh_icons()
+        self._refresh_drawer_button_styles()
         # If the profile popup is visible, refresh it so styles update (avoid leaving stale sizes)
         try:
             if getattr(self, "_drawer_popup", None) and self._drawer_popup.isVisible():
