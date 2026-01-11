@@ -294,23 +294,12 @@ class ScriptWorker(QThread):
 
 
 class MainWindow(QMainWindow):
-    def on_theme_toggle(self):
-        """Toggle between light and dark themes, persist the change."""
-        new_theme = "dark" if not self.dark_mode else "light"
-        self.set_theme(new_theme)
 
-    def set_theme(self, theme: str) -> None:
-        """Set the current theme, apply styles, and persist immediately."""
-        if theme not in ("light", "dark"):
-            return
-        self.dark_mode = theme == "dark"
-        self._theme_name = theme
+    # Theme is always light, no toggle or persistence
+    def set_theme(self):
+        self.dark_mode = False
+        self._theme_name = "light"
         self._apply_styles()
-        # Persist theme change immediately
-        try:
-            self._persist_chats()
-        except Exception as e:
-            print(f"[Theme] Failed to persist theme: {e}")
             
             
     def _export_chats(self) -> None:
@@ -472,7 +461,7 @@ class MainWindow(QMainWindow):
         # AI thread management - support multiple concurrent threads
         self.ai_threads: list[QThread] = []  # List of active AI threads
         self.ai_workers: list[AIWorker] = []  # List of active AI workers
-        # Default to light theme (pure white background)
+        # Default to light theme only
         self.dark_mode = False
         self._theme_name = "light"
         self.chatgpt = ChatGPTHelper()  # Legacy support
@@ -551,12 +540,7 @@ class MainWindow(QMainWindow):
         
         self._build_ui()
         self._apply_styles()
-        # Save theme on change (connect to your theme toggle if needed)
-        # Load persisted state (e.g., selected model) from disk and apply
-        try:
-            self._load_persisted_state()
-        except Exception:
-            pass
+        # No theme persistence or loading
         # Always clear current chat ID at startup
         self._current_chat_id = None
         # Show welcome message if there are no chats, otherwise restore chat
@@ -793,9 +777,9 @@ class MainWindow(QMainWindow):
             chats = [c for c in self._chats if (self._chat_filter.lower() in (c.get("title", "").lower()))]
             if not chats:
                 # Show '무엇이든 물어보세요' if no chats
-                empty_label = QLabel("무엇이든 물어보세요")
+                empty_label = QLabel("'새 채팅'을 눌러 채팅을 시작해보세요")
                 empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                empty_label.setStyleSheet("font-size: 18px; color: #888; font-weight: 600; margin: 24px 0;")
+                empty_label.setStyleSheet("font-size: 14px; color: #888; font-weight: 600; margin: 24px 0;")
                 layout.addWidget(empty_label)
                 return
             for chat in chats:
@@ -6874,7 +6858,7 @@ class MainWindow(QMainWindow):
             row_lyt = QHBoxLayout(row)
             row_lyt.setContentsMargins(0, 0, 0, 0)
             row_lyt.setSpacing(0)
-            label = QLabel("무엇이든 물어보세요")
+            label = QLabel("'무엇이든 물어보세요'")
             label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             color = "#ffffff" if getattr(self, "dark_mode", False) else "#000000"
             label.setStyleSheet(f"font-size: 36px; color: {color}; font-weight: 800; margin: 32px 0;")
