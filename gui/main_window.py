@@ -223,49 +223,6 @@ def _create_styled_dialog(parent, title: str, content: str, min_width: int = 500
 DEFAULT_SCRIPT = """
 """
 
-# Template library
-TEMPLATES = {
-    "텍스트": {
-        "icon_key": "write_icon",
-        "fallback": "[T]",
-        "use_theme": True,
-        "code": 'insert_text("여기에 텍스트를 입력하세요.\r")\ninsert_paragraph()'
-    },
-    "벡터": {
-        "icon_key": "vector_icon",
-        "fallback": "[V]",
-        "use_theme": True,
-        "code": 'insert_equation(r"\\vec{a} = \\begin{pmatrix} a_1 \\\\ a_2 \\\\ a_3 \\end{pmatrix}", font_size_pt=14.0)'
-    },
-    "행렬": {
-        "icon_key": "matrix_icon",
-        "fallback": "🔢",
-        "use_theme": True,
-        "code": 'insert_equation(r"A = \\begin{bmatrix} a & b \\\\ c & d \\end{bmatrix}", font_size_pt=14.0)'
-    },
-    "표": {
-        "icon_key": "chart_icon",
-        "fallback": "📊",
-        "use_theme": True,
-        "code": '# 3x3 표 생성 예시\ninsert_table(rows=3, cols=3, treat_as_char=False)\n\n# 데이터가 있는 표 생성 예시\n# data = [["항목", "값1", "값2"], ["A", "10", "20"], ["B", "30", "40"]]\n# insert_table(rows=3, cols=3, cell_data=data)'
-    },
-    "시그마": {
-        "icon_key": "",
-        "fallback": "Σ",
-        "code": 'insert_equation(r"\\sum_{i=1}^{n} i = \\frac{n(n+1)}{2}", font_size_pt=14.0)'
-    },
-    "미분": {
-        "icon_key": "",
-        "fallback": "∂",
-        "code": 'insert_equation(r"\\frac{d}{dx}f(x) = \\lim_{h \\to 0} \\frac{f(x+h)-f(x)}{h}", font_size_pt=13.0)'
-    },
-    "적분": {
-        "icon_key": "",
-        "fallback": "∫",
-        "code": 'insert_equation(r"\\int_{a}^{b} f(x) dx = F(b) - F(a)", font_size_pt=14.0)'
-    }
-}
-
 # Themes are now loaded from external QSS files
 # - gui/styles/light_theme.qss
 # - gui/styles/dark_theme.qss
@@ -391,18 +348,9 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 QMessageBox.critical(self, "가져오기 오류", f"채팅 가져오기에 실패했습니다.\n{e}")
     def _show_welcome_message(self):
+        # Hero prompt (center of screen) already displays the welcome message.
+        # Just clear the transcript to show a clean slate.
         self._clear_chat_transcript()
-        row = QWidget()
-        row_lyt = QHBoxLayout(row)
-        row_lyt.setContentsMargins(0, 0, 0, 0)
-        row_lyt.setSpacing(0)
-        label = QLabel("무엇이든 물어보세요")
-        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        color = "#ffffff" if getattr(self, "dark_mode", False) else "#000000"
-        label.setStyleSheet(f"font-size: 28px; color: {color}; font-weight: 700; margin: 32px 0;")
-        row_lyt.addWidget(label, 0, Qt.AlignmentFlag.AlignCenter)
-        self.chat_transcript_layout.addWidget(row, 0)
-        self.chat_transcript_layout.addStretch(1)
     def _chat_add_message(self, role: str, content: str) -> None:
         """Add a message to the current chat, update UI, and persist immediately. Also auto-scrolls chat to bottom."""
         # Add to UI
@@ -478,10 +426,11 @@ class MainWindow(QMainWindow):
         # Default to light theme only
         self.dark_mode = False
         self._theme_name = "light"
-        self.chatgpt = ChatGPTHelper()  # Legacy support
-        self.ai_helper = MultiModelAIHelper()  # New multi-model helper
-        self.current_model = self.ai_helper.get_cheapest_model() or "gpt-5-nano"  # Default to cheapest
-        self.backup_manager = BackupManager()  # Initialize backup manager
+        # Defer heavy runtime components until after login to keep startup minimal
+        self.chatgpt = None  # ChatGPTHelper initialized after login
+        self.ai_helper = None  # MultiModelAIHelper initialized after login
+        self.current_model = "gpt-5-nano"  # Default model until helper is available
+        self.backup_manager = None
         # Profile defaults (ensure drawer/profile UI can be built safely)
         # Profile info (will be loaded from Firebase after OAuth login)
         self.profile_display_name = "사용자"
@@ -489,15 +438,13 @@ class MainWindow(QMainWindow):
         self.profile_plan = "Free"
         self.profile_avatar_url = None
         self.profile_uid = None
+        # runtime initialization flag
+        self._runtime_initialized = False
 
-        # OAuth login and user info fetch
+        # OAuth login and user info fetch (do NOT auto-launch login on startup)
         try:
             from backend.oauth_desktop import start_oauth_flow, get_stored_user
             user = get_stored_user()
-            if not user:
-                # Launch browser login and wait for callback
-                start_oauth_flow()
-                user = get_stored_user()
             if user:
                 self.profile_uid = user.get("uid")
                 self.profile_display_name = user.get("name") or "사용자"
@@ -505,9 +452,15 @@ class MainWindow(QMainWindow):
                 self.profile_avatar_url = user.get("photo_url")
                 self.profile_handle = user.get("handle") or user.get("email", "").split("@")[0] or ""
             else:
-                print("[OAuth] No user info found after login.")
+                # Do not redirect to login automatically; show a login button instead
+                print("[OAuth] No stored user; login available via Login button.")
         except Exception as e:
             print(f"[OAuth] Login or user info fetch failed: {e}")
+
+        # Suppress modal dialogs that would appear during startup to avoid popups
+        # from background checks (HWP, etc.). This flag is cleared after UI is
+        # built and initializations are complete.
+        self._suppress_startup_dialogs = True
 
         # Optionally, fetch more profile info from Firebase if needed
         if self.profile_uid:
@@ -536,9 +489,8 @@ class MainWindow(QMainWindow):
         self._drawer_popup: QFrame | None = None
         self.selected_files: list[str] = []  # Track selected files/images
         
-        # Initialize HWP detector with polling
-        self.hwp_detector = HwpDetector(poll_interval_ms=500)
-        self.hwp_detector.state_changed.connect(self._on_hwp_state_changed)
+        # Defer HWP detector and other runtime components until user logs in
+        self.hwp_detector = None
         self._progress_active = False  # Track if progress message is active
         self._progress_base_text = ""  # Current progress text
         self._progress_fade_count = 0  # Frame counter for fade animation (0-9)
@@ -554,38 +506,92 @@ class MainWindow(QMainWindow):
         
         self._build_ui()
         self._apply_styles()
-        # Load persisted UI/chat state from disk early to avoid accidental overwrites
-        try:
-            # Prevent persistence before we've loaded existing state
-            self._initial_load_done = False
-            self._load_persisted_state()
-        except Exception:
-            # If load fails, continue but ensure flag is set so persistence can happen normally
-            pass
-        finally:
-            self._initial_load_done = True
-
-        # Always clear current chat ID at startup
+        # Skip loading persisted chats or showing welcome message during minimal startup.
+        self._initial_load_done = True
         self._current_chat_id = None
-        # Show welcome message if there are no chats, otherwise restore chat
-        if not self._chats:
-            self._show_welcome_message()
-        else:
-            self._restore_chat_messages(self._chats[0])
-        # Render chat list (will show empty state if no chats)
-        self._render_chat_list()
         # Apply responsive UI tweaks immediately and on resize
         self._apply_responsive_layout()
         
-        # Start HWP detection if adapter is available
-        if self.hwp_detector.is_adapter_available():
-            self.hwp_detector.start_polling()
-            print("[MainWindow] HWP detector started")
-        else:
-            print("[MainWindow] HWP detector not available on this platform")
-        
         # Enable drag and drop for images and PDFs
         self.setAcceptDrops(True)
+
+        # Only load persisted UI/chat state and start runtime services after login
+        if getattr(self, 'profile_uid', None):
+            try:
+                # Prevent persistence before we've loaded existing state
+                self._initial_load_done = False
+                self._load_persisted_state()
+            except Exception:
+                pass
+            finally:
+                self._initial_load_done = True
+
+            # Restore chat state if present
+            try:
+                self._current_chat_id = None
+                if not self._chats:
+                    self._show_welcome_message()
+                else:
+                    self._restore_chat_messages(self._chats[0])
+                self._render_chat_list()
+            except Exception:
+                pass
+
+            # Start runtime components (HWP detector, AI helpers, backup manager)
+            try:
+                self._ensure_runtime_initialized()
+            except Exception as e:
+                print(f"[MainWindow] Runtime init failed: {e}")
+        else:
+            # Logged out: skip loading state and runtime initialization to keep startup minimal
+            self._initial_load_done = True
+            self._current_chat_id = None
+            # Keep UI minimal; auth state will show login button
+            try:
+                self._apply_auth_state()
+            except Exception:
+                pass
+
+    def _ensure_runtime_initialized(self) -> None:
+        """Initialize heavy runtime components (AI helpers, backup manager, HWP detector).
+
+        It's safe to call this multiple times; it will no-op if already initialized.
+        """
+        if getattr(self, '_runtime_initialized', False):
+            return
+        # Chat/AI helpers
+        try:
+            self.chatgpt = ChatGPTHelper()
+        except Exception as e:
+            print(f"[Runtime] Failed to initialize ChatGPTHelper: {e}")
+            self.chatgpt = None
+        try:
+            self.ai_helper = MultiModelAIHelper()
+            try:
+                self.current_model = self.ai_helper.get_cheapest_model() or self.current_model
+            except Exception:
+                pass
+        except Exception as e:
+            print(f"[Runtime] Failed to initialize MultiModelAIHelper: {e}")
+            self.ai_helper = None
+        try:
+            self.backup_manager = BackupManager()
+        except Exception as e:
+            print(f"[Runtime] Failed to initialize BackupManager: {e}")
+            self.backup_manager = None
+        # HWP detector
+        try:
+            self.hwp_detector = HwpDetector(poll_interval_ms=500)
+            self.hwp_detector.state_changed.connect(self._on_hwp_state_changed)
+            if self.hwp_detector.is_adapter_available():
+                self.hwp_detector.start_polling()
+                print("[MainWindow] HWP detector started")
+            else:
+                print("[MainWindow] HWP detector not available on this platform")
+        except Exception as e:
+            print(f"[Runtime] Failed to initialize HWP detector: {e}")
+            self.hwp_detector = None
+        self._runtime_initialized = True
 
     def closeEvent(self, event) -> None:
         """Ensure floating/overlay widgets are hidden/deleted to avoid leaking top-level windows."""
@@ -1548,12 +1554,21 @@ class MainWindow(QMainWindow):
 
         main_area = QWidget()
         main_area.setObjectName("main-area")
+        # expose main_area for visibility control when auth changes
+        self.main_area = main_area
         main_column = QVBoxLayout(main_area)
         main_column.setContentsMargins(0, 0, 0, 0)
         main_column.setSpacing(0)
         
         # Header area (title, help buttons, templates)
         self.header_area = QWidget()
+        # Hide header by default so it doesn't flash on startup; it will be shown
+        # only when a user is logged in via `_apply_auth_state()`.
+        try:
+            self.header_area.hide()
+            self.header_area.setMaximumHeight(0)
+        except Exception:
+            pass
         # Allow targeted styling and transparency for the top navbar
         self.header_area.setObjectName("header-area")
         try:
@@ -1563,9 +1578,6 @@ class MainWindow(QMainWindow):
         header_layout = QVBoxLayout(self.header_area)
         header_layout.setContentsMargins(40, 40, 40, 0)
         header_layout.setSpacing(20)
-        
-        header_layout.addWidget(self._build_header())
-        header_layout.addWidget(self._build_templates(), 0)  # No stretch
         
         # Output area (conversation/chat display)
         self.output_area = QWidget()
@@ -1618,6 +1630,8 @@ class MainWindow(QMainWindow):
         # Input area at bottom (fixed)
         input_area = QWidget()
         input_area.setObjectName("input-container")
+        # expose input area for auth-based visibility
+        self.input_area = input_area
         input_layout = QVBoxLayout(input_area)
         # Keep the composer compact (shorter input form height).
         input_layout.setContentsMargins(20, 0, 20, 16)
@@ -1636,6 +1650,8 @@ class MainWindow(QMainWindow):
         # Script editor container with buttons inside
         script_container = QWidget()
         script_container.setObjectName("script-input-container")
+        # expose script container to toggle when logged out
+        self.script_container = script_container
         script_layout = QVBoxLayout(script_container)
         script_layout.setContentsMargins(16, 16, 16, 16)
         script_layout.setSpacing(12)
@@ -1825,7 +1841,7 @@ class MainWindow(QMainWindow):
         hero_layout = QVBoxLayout(hero_area)
         hero_layout.setContentsMargins(40, 0, 40, 0)
         hero_layout.setSpacing(0)
-        hero_layout.addStretch(1)
+        hero_layout.addStretch(4)
         hero_prompt = QLabel("무엇이든 물어보세요")
         hero_prompt.setObjectName("hero-prompt")
         hero_prompt.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -1835,7 +1851,7 @@ class MainWindow(QMainWindow):
         self.center_prompt = hero_prompt
         hero_layout.addWidget(self.center_prompt, alignment=Qt.AlignmentFlag.AlignCenter)
         hero_layout.addSpacing(18)
-        hero_layout.addStretch(1)
+        hero_layout.addStretch(2)
         # Store hero area so we can hide it when chat transcript becomes active.
         self.hero_area = hero_area
         main_column.addWidget(hero_area, 1)
@@ -1964,7 +1980,9 @@ class MainWindow(QMainWindow):
             pass
 
         top_bar_layout.addStretch()
-        main_column.insertWidget(0, top_bar, 0)
+        # NOTE: Login button removed from main window (login is now handled via the standalone LoginWindow).
+        # If you need to re-enable a main-window login button, re-add widget creation here.
+        main_column.insertWidget(0, top_bar, 0) 
 
         # Insert chat transcript area above the input. Hidden until first AI message.
         try:
@@ -1990,6 +2008,23 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(main_area, 1)
         self.setCentralWidget(central)
+        # Apply auth state after initial UI build so we hide chat UI when no user is logged in
+        try:
+            QTimer.singleShot(0, lambda: self._apply_auth_state())
+        except Exception:
+            try:
+                self._apply_auth_state()
+            except Exception:
+                pass
+        # Clear the startup dialog suppression shortly after UI is ready so
+        # future dialogs behave normally.
+        try:
+            QTimer.singleShot(800, lambda: setattr(self, '_suppress_startup_dialogs', False))
+        except Exception:
+            try:
+                self._suppress_startup_dialogs = False
+            except Exception:
+                pass
 
         # Chat transcript state
         self._chat_widgets: list[tuple[str, QWidget, QLabel]] = []  # (role, row_widget, bubble_label)
@@ -1997,41 +2032,6 @@ class MainWindow(QMainWindow):
         self._thinking_timer: QTimer | None = None
         self._thinking_dots = 0
         self._auto_execute_mode = False  # Flag to auto-execute generated code without showing it
-
-
-    def _build_header(self) -> QWidget:
-        frame = QFrame()
-        lyt = QVBoxLayout(frame)
-        lyt.setSpacing(8)
-        lyt.setContentsMargins(0, 0, 0, 0)
-        
-        # Title with logo
-        title_container = QWidget()
-        title_layout = QHBoxLayout(title_container)
-        title_layout.setContentsMargins(0, 0, 0, 0)
-        title_layout.setSpacing(12)
-        title_layout.addStretch()
-        
-        # Logo
-        self.logo_label = QLabel()
-        self.logo_label.setObjectName("app-logo")
-        self.logo_label.setStyleSheet("font-size: 36px; color: #5377f6;")
-        self._set_app_logo()
-        title_layout.addWidget(self.logo_label)
-        
-        # Title text
-        title = QLabel("Nova AI")
-        title.setObjectName("app-title")
-        title_layout.addWidget(title)
-        
-        title_layout.addStretch()
-        
-        subtitle = QLabel("최고의 한글 수식 자동화 에이전트")
-        subtitle.setObjectName("app-subtitle")
-        
-        lyt.addWidget(title_container, alignment=Qt.AlignmentFlag.AlignCenter)
-        lyt.addWidget(subtitle, alignment=Qt.AlignmentFlag.AlignCenter)
-        return frame
 
     def _build_help_buttons(self) -> QWidget:
         """Build compact help buttons for the top-left area."""
@@ -2070,64 +2070,6 @@ class MainWindow(QMainWindow):
 
         # Apply distinct styling to help buttons after loading theme
         self._apply_help_button_style()
-        return container
-
-    def _build_templates(self) -> QWidget:
-        """Build template library cards - centered."""
-        container = QWidget()
-        container.setObjectName("templates-container")
-        layout = QVBoxLayout(container)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
-        
-        # Center the grid
-        grid_container = QWidget()
-        grid_layout = QVBoxLayout(grid_container)
-        grid_layout.setContentsMargins(0, 0, 0, 0)
-        
-        # Create a horizontal layout for the grid
-        h_grid = QHBoxLayout()
-        h_grid.setContentsMargins(0, 0, 0, 0)
-        h_grid.setSpacing(12)
-        h_grid.addStretch()
-        
-        self.template_buttons: list[tuple[QPushButton, dict]] = []
-        for name, template in TEMPLATES.items():
-            icon_key = template.get("icon_key", "")
-            fallback = template.get("fallback", name[0])
-            
-            if icon_key:
-                btn = QPushButton()
-                btn.setObjectName("template-btn")
-                btn.setMaximumWidth(140)
-                btn.setMinimumHeight(44)
-                btn.clicked.connect(lambda checked, code=template["code"]: self._load_template(code))
-                btn.setStyleSheet("text-align: right; padding-right: 12px;")
-                use_theme = template.get("use_theme", False)
-                btn.setText(name)
-                if use_theme:
-                    self._apply_button_icon_themed(btn, icon_key, fallback, QSize(16, 16), preserve_text=True)
-                else:
-                    self._apply_button_icon(btn, icon_key, fallback, QSize(16, 16), preserve_text=True)
-            else:
-                btn = QPushButton(f"{fallback} {name}")
-                btn.setObjectName("template-btn")
-                btn.setMaximumWidth(140)
-                btn.setMinimumHeight(44)
-                btn.clicked.connect(lambda checked, code=template["code"]: self._load_template(code))
-                btn.setStyleSheet("text-align: right; padding-right: 12px;")
-            
-            template["label"] = name
-            template["fallback_display"] = fallback
-            self.template_buttons.append((btn, template))
-            h_grid.addWidget(btn)
-        
-        h_grid.addStretch()
-        grid_layout.addLayout(h_grid)
-        
-        layout.addWidget(grid_container)
-        layout.addStretch()
-        
         return container
 
     def _load_template(self, code: str) -> None:
@@ -2363,6 +2305,12 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
+        # Keep a reference to the avatar widget so we can refresh it after login
+        try:
+            self.drawer_avatar = avatar
+        except Exception:
+            self.drawer_avatar = None
+
         name_box = QWidget()
         nb_lyt = QVBoxLayout(name_box)
         nb_lyt.setContentsMargins(0, 0, 0, 0)
@@ -2547,6 +2495,234 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         return super().eventFilter(obj, event)
+
+    def _start_login_flow(self) -> None:
+        """Start OAuth login flow when user clicks login button; update profile UI on success."""
+        try:
+            from backend.oauth_desktop import start_oauth_flow, get_stored_user
+            start_oauth_flow()
+            user = get_stored_user()
+            if user:
+                self.profile_uid = user.get("uid")
+                self.profile_display_name = user.get("name") or "사용자"
+                self.profile_plan = user.get("tier") or "Free"
+                self.profile_avatar_url = user.get("photo_url")
+                self.profile_handle = user.get("handle") or user.get("email", "").split("@")[0] or ""
+                # Optionally fetch extended profile from Firebase
+                try:
+                    from backend.firebase_profile import get_user_profile
+                    profile = get_user_profile(self.profile_uid)
+                    if profile:
+                        self.profile_display_name = profile.get("display_name") or self.profile_display_name
+                        self.profile_plan = profile.get("tier") or self.profile_plan
+                        self.profile_avatar_url = profile.get("photo_url") or self.profile_avatar_url
+                        self.profile_handle = profile.get("handle") or profile.get("email", "").split("@")[0] or self.profile_handle
+                except Exception:
+                    pass
+                # Update UI
+                try:
+                    self._refresh_profile_ui()
+                except Exception:
+                    pass
+                try:
+                    if hasattr(self, 'login_btn'):
+                        self.login_btn.hide()
+                except Exception:
+                    pass
+                # Initialize runtime components (AI helpers, HWP detector) then show chat UI
+                try:
+                    self._ensure_runtime_initialized()
+                except Exception:
+                    pass
+                try:
+                    self._apply_auth_state()
+                except Exception:
+                    pass
+                try:
+                    # Use the styled dialog (blue action button, icon) like logout
+                    from pathlib import Path
+                    assets_dir = Path(__file__).resolve().parents[1] / "public" / "img"
+                    icon_file = assets_dir / ("profile-dark.svg" if self.dark_mode else "profile-light.svg")
+                    try:
+                        msg = _create_styled_dialog(self, "로그인", "로그인 완료되었습니다.", min_width=420, dark_mode=self.dark_mode, icon_path=str(icon_file) if icon_file.exists() else None)
+                        msg.exec()
+                    except Exception:
+                        QMessageBox.information(self, "로그인", "로그인 완료되었습니다.")
+                except Exception:
+                    pass
+            else:
+                try:
+                    QMessageBox.information(self, "로그인", "로그인에 실패했습니다.")
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"[OAuth] Login failed: {e}")
+            try:
+                QMessageBox.warning(self, "로그인 실패", f"로그인 실행 중 오류가 발생했습니다: {e}")
+            except Exception:
+                pass
+
+    def _refresh_profile_ui(self) -> None:
+        """Refresh UI elements that display profile info (drawer name/avatar)."""
+        try:
+            if getattr(self, 'drawer_name_label', None):
+                self.drawer_name_label.setText(self.profile_display_name)
+            if getattr(self, 'drawer_avatar', None):
+                avatar = self.drawer_avatar
+                try:
+                    if self.profile_avatar_url:
+                        from urllib.request import urlopen
+                        from PySide6.QtCore import QByteArray  # type: ignore[import-not-found]
+                        img_data = urlopen(self.profile_avatar_url).read()
+                        pix = QPixmap()
+                        pix.loadFromData(QByteArray(img_data))
+                        if not pix.isNull():
+                            pix = pix.scaled(48, 48, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
+                            out = QPixmap(48, 48)
+                            out.fill(Qt.GlobalColor.transparent)
+                            painter = QPainter(out)
+                            try:
+                                painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+                                pathp = QPainterPath()
+                                pathp.addEllipse(0, 0, 48, 48)
+                                painter.setClipPath(pathp)
+                                painter.drawPixmap(0, 0, pix)
+                            finally:
+                                painter.end()
+                            try:
+                                out = design.adjust_pixmap_for_high_dpi(out, 48)
+                            except Exception:
+                                pass
+                            avatar.setPixmap(out)
+                            avatar.setFixedSize(48, 48)
+                            avatar.setStyleSheet("border-radius: 24px; background: transparent;")
+                            return
+                except Exception:
+                    pass
+                # fallback: initial letter avatar
+                initial = (self.profile_display_name[:1] or "U").upper()
+                avatar.setText(initial)
+                avatar.setFixedSize(48, 48)
+                avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                try:
+                    avatar.setStyleSheet("background:#2b7bf6; color:#ffffff; border-radius:24px; font-weight:800; font-size:16px;")
+                    f = avatar.font()
+                    f.setPointSize(16)
+                    try:
+                        f.setWeight(QFont.Weight.DemiBold)
+                    except Exception:
+                        f.setWeight(QFont.Weight.Bold)
+                    avatar.setFont(f)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def _apply_auth_state(self) -> None:
+        """Show/hide UI elements depending on whether a user is logged in.
+
+        When not logged in we hide chat-related UI (hero area, output, input, templates,
+        AI buttons, drawer toggle) and show only the login button so the app presents
+        a single clear action for the user.
+        """
+        logged_in = bool(getattr(self, 'profile_uid', None))
+        try:
+            if logged_in:
+                # Show chat UI
+                for attr in ('header_area', 'hero_area', 'output_area', 'input_area', 'script_container', 'ai_generate_button'):
+                    w = getattr(self, attr, None)
+                    if w is not None:
+                        try:
+                            w.show()
+                        except Exception:
+                            pass
+                # Restore header area size and show templates/logo if present
+                try:
+                    if hasattr(self, 'header_area'):
+                        self.header_area.show()
+                        try:
+                            self.header_area.setMaximumHeight(16777215)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+                try:
+                    if getattr(self, 'templates_widget', None):
+                        self.templates_widget.show()
+                        try:
+                            self.templates_widget.setMaximumHeight(16777215)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+                try:
+                    if hasattr(self, 'logo_label'):
+                        self.logo_label.show()
+                except Exception:
+                    pass
+
+                # Show drawer toggle and other nav controls
+                try:
+                    if hasattr(self, 'drawer_toggle_btn'):
+                        self.drawer_toggle_btn.show()
+                except Exception:
+                    pass
+                # Hide login button
+                try:
+                    if hasattr(self, 'login_btn'):
+                        self.login_btn.hide()
+                except Exception:
+                    pass
+            else:
+                # Hide main chat UI components
+                for attr in ('header_area', 'hero_area', 'output_area', 'input_area', 'script_container', 'ai_generate_button', 'top_model_display'):
+                    w = getattr(self, attr, None)
+                    if w is not None:
+                        try:
+                            w.hide()
+                        except Exception:
+                            pass
+                # Collapse header area so it doesn't take up space
+                try:
+                    if hasattr(self, 'header_area'):
+                        try:
+                            self.header_area.hide()
+                            self.header_area.setMaximumHeight(0)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+                try:
+                    if getattr(self, 'templates_widget', None):
+                        try:
+                            self.templates_widget.hide()
+                            self.templates_widget.setMaximumHeight(0)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+                try:
+                    if hasattr(self, 'logo_label'):
+                        self.logo_label.hide()
+                except Exception:
+                    pass
+
+                # Hide drawer toggle (no drawer when not logged in)
+                try:
+                    if hasattr(self, 'drawer_toggle_btn'):
+                        self.drawer_toggle_btn.hide()
+                except Exception:
+                    pass
+                # Ensure only login button is visible
+                try:
+                    if hasattr(self, 'login_btn'):
+                        self.login_btn.show()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        except Exception:
+            pass
 
     def _toggle_drawer(self) -> None:
         self._drawer_open = not getattr(self, "_drawer_open", False)
@@ -2789,7 +2965,8 @@ class MainWindow(QMainWindow):
             # Composer / script container: rounded, light background, subtle drop shadow
             if hasattr(self, "script_container") and isinstance(self.script_container, QWidget):
                 try:
-                    sc_bg = "#ffffff" if not self.dark_mode else "#0f1724"
+                    # Use a light gray background in light theme to match previous appearance
+                    sc_bg = "#f4f6f8" if not self.dark_mode else "#0f1724"
                     sc_border = "#e5e7eb" if not self.dark_mode else "#374151"
                     self.script_container.setStyleSheet(
                         f"QFrame#composer-pill, QWidget#script-input-container {{ background: {sc_bg}; border: 1px solid {sc_border}; border-radius: 20px; }}")
@@ -3005,7 +3182,7 @@ class MainWindow(QMainWindow):
         )
         # Also set the palette color as a defensive fallback
         try:
-            from PySide6.QtGui import QColor
+            from PySide6.QtGui import QColor  # type: ignore[reportMissingImports]
             pal = lbl.palette()
             pal.setColor(lbl.foregroundRole(), QColor("#B7B7B7"))
             lbl.setPalette(pal)
@@ -4385,7 +4562,137 @@ class MainWindow(QMainWindow):
     def _show_account_popup(self) -> None:
         """Compatibility shim: show the profile menu (redirects to _show_profile_menu)."""
         self._show_profile_menu()
-    
+
+    def _account_logout(self) -> None:
+        """Log the current user out: confirm, remove stored credentials, and reset UI."""
+        # Use a styled confirmation dialog with logout icon and blue buttons
+        try:
+            from pathlib import Path
+            # Compose HTML content for a prominent centered title
+            content_html = "<div style='text-align:center; font-size:20px; font-weight:800; padding:8px 0;'>정말 로그아웃 하시겠습니까?</div>"
+
+            # Try to load a logout icon (larger than the default question icon)
+            assets_dir = Path(__file__).resolve().parents[1] / "public" / "img"
+            icon_file = assets_dir / ("logout-dark.svg" if self.dark_mode else "logout-light.svg")
+            try:
+                pix = design.load_high_dpi_pixmap(icon_file, 64)
+            except Exception:
+                pix = None
+
+            # Build custom QMessageBox so we can control button order and styling
+            dlg = QMessageBox(self)
+            dlg.setWindowTitle("로그아웃")
+            dlg.setTextFormat(Qt.RichText)
+            dlg.setText(content_html)
+            if pix is not None:
+                dlg.setIconPixmap(pix)
+            else:
+                dlg.setIcon(QMessageBox.Icon.NoIcon)
+
+            # Create custom buttons (No on the left, Yes on the right)
+            btn_no = QPushButton("No")
+            btn_yes = QPushButton("Yes")
+            # Apply blue OK-style to both buttons
+            btn_style = """
+                QPushButton {
+                    background-color: #5377f6;
+                    color: white;
+                    border: none;
+                    border-radius: 8px;
+                    padding: 6px 10px; /* reduced horizontal padding */
+                    font-size: 13px;
+                    font-weight: 600;
+                    min-width: 48px; /* smaller minimum width */
+                }
+                QPushButton:hover {
+                    background-color: #3e5fc7;
+                }
+                QPushButton:pressed {
+                    background-color: #2e47a0;
+                }
+            """
+            dlg.setStyleSheet(btn_style + "QMessageBox { border-radius: 12px; }")
+            # Add subtle shadow
+            try:
+                shadow = QGraphicsDropShadowEffect(dlg)
+                shadow.setBlurRadius(22)
+                shadow.setOffset(0, 0)
+                shadow.setColor(QColor(0, 0, 0, 40) if not self.dark_mode else QColor(0,0,0,80))
+                dlg.setGraphicsEffect(shadow)
+            except Exception:
+                pass
+
+            dlg.addButton(btn_no, QMessageBox.ButtonRole.RejectRole)
+            dlg.addButton(btn_yes, QMessageBox.ButtonRole.AcceptRole)
+            dlg.setDefaultButton(btn_no)
+
+            # Execute and check which button was clicked
+            dlg.exec()
+            clicked = dlg.clickedButton()
+            if clicked is not btn_yes:
+                return
+        except Exception:
+            # Fallback to simple confirmation if custom dialog fails
+            try:
+                ans = QMessageBox.question(self, "로그아웃", "정말 로그아웃 하시겠습니까?", QMessageBox.Yes | QMessageBox.No)
+                if ans != QMessageBox.Yes:
+                    return
+            except Exception:
+                return
+
+        success = False
+        try:
+            from backend.oauth_desktop import logout_user
+            success = logout_user()
+        except Exception as e:
+            print(f"[OAuth] Logout failed to remove stored user: {e}")
+            success = False
+
+        if success:
+            # Reset in-memory profile state
+            self.profile_uid = None
+            self.profile_display_name = "사용자"
+            self.profile_plan = "Free"
+            self.profile_avatar_url = None
+            self.profile_handle = ""
+            # Hide drawer popup (if any) and close drawer for clarity
+            try:
+                self._hide_drawer_popup()
+            except Exception:
+                pass
+            try:
+                self._set_drawer_open(False, animate=False)
+            except Exception:
+                pass
+            # Update UI
+            try:
+                self._refresh_profile_ui()
+            except Exception:
+                pass
+            try:
+                if hasattr(self, 'login_btn'):
+                    self.login_btn.show()
+            except Exception:
+                pass
+            # Update UI visibility to hide chat UI now that user is logged out
+            try:
+                self._apply_auth_state()
+            except Exception:
+                pass
+            try:
+                msg = _create_styled_dialog(self, "로그아웃", "성공적으로 로그아웃되었습니다.", min_width=420, dark_mode=self.dark_mode, icon_path=str(icon_file) if 'icon_file' in locals() else None)
+                msg.exec()
+            except Exception:
+                try:
+                    QMessageBox.information(self, "로그아웃", "성공적으로 로그아웃되었습니다.")
+                except Exception:
+                    pass
+        else:
+            try:
+                QMessageBox.warning(self, "로그아웃 실패", "로그아웃에 실패했습니다. 다시 시도해주세요.")
+            except Exception:
+                pass
+
     def _show_code_input_dialog(self) -> None:
         """Show code input dialog for advanced users who want to write Python code directly."""
         dialog = QDialog(self)
@@ -6918,8 +7225,14 @@ class MainWindow(QMainWindow):
                         background-color: #e0e0e0;
                     }
                 """)
-            
-            msg.exec()
+            # Respect startup suppression flag: avoid showing modal dialogs during startup
+            if getattr(self, '_suppress_startup_dialogs', False):
+                print('[Startup] Suppressed HWP startup dialog')
+            else:
+                try:
+                    msg.exec()
+                except Exception:
+                    pass
 
     def _update_hwp_filename(self) -> None:
         """Automatically detect and update the currently open HWP document filename."""
@@ -6997,19 +7310,8 @@ class MainWindow(QMainWindow):
             )
             # Activate the new chat so UI updates consistently and the drawer closes via _activate_chat
             self._activate_chat(new_id)
-            # Show big black '무엇이든 물어보세요' in the chat area (not as a chat message)
+            # Hero prompt is already shown in the main area; avoid duplicating it in the transcript.
             self._clear_chat_transcript()
-            row = QWidget()
-            row_lyt = QHBoxLayout(row)
-            row_lyt.setContentsMargins(0, 0, 0, 0)
-            row_lyt.setSpacing(0)
-            label = QLabel("무엇이든 물어보세요")
-            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            color = "#ffffff" if getattr(self, "dark_mode", False) else "#000000"
-            label.setStyleSheet(f"font-size: 36px; color: {color}; font-weight: 800; margin: 32px 0;")
-            row_lyt.addWidget(label, 0, Qt.AlignmentFlag.AlignCenter)
-            self.chat_transcript_layout.addWidget(row, 0)
-            self.chat_transcript_layout.addStretch(1)
             # Ensure editor is focused and set to default script
             try:
                 if hasattr(self, "script_edit"):
@@ -7144,6 +7446,19 @@ class MainWindow(QMainWindow):
 
 
 def run_app() -> None:
+    """Start the GUI app.
+
+    If the environment variable `FORMULITE_HIDE_WINDOW` is set to '1', 'true', or 'yes',
+    the function will not create or show the main window and will return immediately.
+    This is useful for running the process in headless or background modes without a
+    visible window on startup.
+    """
+    import os
+
+    # Environment-driven control: by default we SHOW the main window on startup.
+    # To hide the window on startup set FORMULITE_HIDE_WINDOW=1 (or 'true'/'yes').
+    hide_env = os.environ.get("FORMULITE_HIDE_WINDOW", "").lower() in ("1", "true", "yes")
+
     existing_app = QApplication.instance()
     if existing_app is None:
         app = QApplication([])
@@ -7151,8 +7466,117 @@ def run_app() -> None:
         app = existing_app  # type: ignore[assignment]
     assert isinstance(app, QApplication)
     _apply_app_font(app)
+
+    # If hide explicitly requested, skip
+    if hide_env:
+        print("[run_app] FORMULITE_HIDE_WINDOW set — skipping main window creation.")
+        return
+
+    # Default behavior: show the main window
+    print("[run_app] Showing main window (default behavior).")
+
+    # If there is no stored user, show the separate LoginWindow first (lightweight, standalone).
+    try:
+        from backend.oauth_desktop import get_stored_user
+        stored = get_stored_user()
+    except Exception:
+        stored = None
+
+    if not stored:
+        try:
+            from .login_window import LoginWindow
+            def _launch_oauth():
+                try:
+                    from backend.oauth_desktop import start_oauth_flow
+                    start_oauth_flow()
+                except Exception as e:
+                    print(f"[LoginWindow] Failed to start oauth flow: {e}")
+
+            login_dlg = LoginWindow(parent=None, dark_mode=False, on_login=_launch_oauth)
+            # Show modally and proceed to main window regardless (user can login in browser)
+            login_dlg.exec()
+        except Exception as e:
+            print(f"[run_app] Failed to show LoginWindow: {e}")
+
     window = MainWindow()
     window.show()
+
+    # Monitor & cleanup: inspect top-level widgets multiple times during startup and hide small overlays.
+    def _monitor_and_cleanup_startup_top_level_widgets(main_win: "MainWindow") -> None:
+        def scan_once(pass_no: int) -> None:
+            try:
+                app_instance = QApplication.instance()
+                print(f"[startup-monitor] scan #{pass_no} - top-level widgets:")
+                for w in list(app_instance.topLevelWidgets()):
+                    try:
+                        cls = w.__class__.__name__
+                        oname = w.objectName() if hasattr(w, 'objectName') else ''
+                        geom = w.geometry()
+                        title = w.windowTitle() if hasattr(w, 'windowTitle') else ''
+                        flags = int(w.windowFlags())
+
+                        # Evaluate flag names for better diagnostics
+                        flag_names = []
+                        try:
+                            if w.windowFlags() & Qt.FramelessWindowHint:
+                                flag_names.append('FramelessWindowHint')
+                            if w.windowFlags() & Qt.Tool:
+                                flag_names.append('Tool')
+                            if w.windowFlags() & Qt.WindowStaysOnTopHint:
+                                flag_names.append('StaysOnTop')
+                            if w.windowFlags() & Qt.Dialog:
+                                flag_names.append('Dialog')
+                            if w.windowFlags() & Qt.SplashScreen:
+                                flag_names.append('SplashScreen')
+                        except Exception:
+                            pass
+
+                        visible = w.isVisible()
+                        is_small = geom.width() <= 220 and geom.height() <= 220
+                        has_title = bool(title and title.strip())
+                        is_frameless = 'FramelessWindowHint' in flag_names or 'Tool' in flag_names
+
+                        # Print diagnostic line
+                        try:
+                            palette_bg = w.palette().window().color().name()
+                        except Exception:
+                            palette_bg = 'unknown'
+                        print(f" - {cls} name='{oname}' visible={visible} flags={flag_names} size={geom.width()}x{geom.height()} small={is_small} title='{title}' bg={palette_bg}")
+
+                        # Decide whether to remove: conservative OR force mode
+                        force_remove = os.environ.get('FORMULITE_FORCE_REMOVE_SMALL_TOPLEVEL', '').lower() in ('1', 'true', 'yes')
+                        should_remove = False
+
+                        if w is main_win:
+                            should_remove = False
+                        elif visible and is_small:
+                            # Remove if frameless or no title (likely overlay) OR if force_remove is enabled
+                            if is_frameless or not has_title or force_remove:
+                                should_remove = True
+
+                        if should_remove:
+                            print(f"[startup-monitor] Removing top-level widget -> {cls} ('{oname}') size={geom.width()}x{geom.height()} title='{title}' flags={flag_names}")
+                            try:
+                                w.hide()
+                                w.setParent(main_win)
+                                w.deleteLater()
+                            except Exception as e:
+                                print(f"[startup-monitor] Failed to remove widget: {e}")
+                    except Exception as e:
+                        print(f"[startup-monitor] Widget scan inner error: {e}")
+            except Exception as e:
+                print(f"[startup-monitor] scan error: {e}")
+
+        # Schedule multiple scans during the first 2 seconds to catch widgets created asynchronously
+        QTimer.singleShot(100, lambda: scan_once(1))
+        QTimer.singleShot(500, lambda: scan_once(2))
+        QTimer.singleShot(1000, lambda: scan_once(3))
+        QTimer.singleShot(2000, lambda: scan_once(4))
+
+    # Run monitoring/cleanup unless disabled
+    if os.environ.get("FORMULITE_DISABLE_OVERLAY_CLEANUP", "").lower() not in ("1", "true", "yes"):
+        _monitor_and_cleanup_startup_top_level_widgets(window)
+
     app.exec()
 
 

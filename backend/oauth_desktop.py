@@ -72,3 +72,14 @@ def get_stored_user():
         with open(USER_DATA_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
     return None
+
+
+def logout_user() -> bool:
+    """Remove stored user data (used for logout). Returns True on success."""
+    try:
+        if os.path.exists(USER_DATA_FILE):
+            os.remove(USER_DATA_FILE)
+        return True
+    except Exception as e:
+        print(f"[OAuth] Failed to remove user data: {e}")
+        return False

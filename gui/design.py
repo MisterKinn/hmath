@@ -120,10 +120,10 @@ def create_styled_dialog(parent, title: str, content: str, min_width: int = 500,
             color: white;
             border: none;
             border-radius: 8px;
-            padding: 8px 24px;
+            padding: 6px 10px; /* match logout button compact style */
             font-size: 13px;
             font-weight: 600;
-            min-width: 80px;
+            min-width: 48px; /* smaller minimum width for compact button */
         }
         QPushButton:hover {
             background-color: #3e5fc7;
