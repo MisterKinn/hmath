@@ -2547,10 +2547,10 @@ class MainWindow(QMainWindow):
                     assets_dir = Path(__file__).resolve().parents[1] / "public" / "img"
                     icon_file = assets_dir / ("profile-dark.svg" if self.dark_mode else "profile-light.svg")
                     try:
-                        msg = _create_styled_dialog(self, "로그인", "로그인 완료되었습니다.", min_width=420, dark_mode=self.dark_mode, icon_path=str(icon_file) if icon_file.exists() else None)
+                        msg = _create_styled_dialog(self, "로그인", "로그인이 완료되었습니다.", min_width=420, dark_mode=self.dark_mode, icon_path=str(icon_file) if icon_file.exists() else None)
                         msg.exec()
                     except Exception:
-                        QMessageBox.information(self, "로그인", "로그인 완료되었습니다.")
+                        QMessageBox.information(self, "로그인", "로그인이 완료되었습니다.")
                 except Exception:
                     pass
             else:
