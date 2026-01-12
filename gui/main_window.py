@@ -532,7 +532,9 @@ class MainWindow(QMainWindow):
                 if not self._chats:
                     self._show_welcome_message()
                 else:
-                    self._restore_chat_messages(self._chats[0])
+                    # Don't restore chat messages on initial launch - keep it clean
+                    # self._restore_chat_messages(self._chats[0])
+                    self._show_welcome_message()
                 self._render_chat_list()
             except Exception:
                 pass
@@ -766,13 +768,14 @@ class MainWindow(QMainWindow):
                 except Exception as e:
                     print(f"[Persist] Failed to set model: {e}")
 
-            # Load theme if present
+            # Load theme if present - but force light theme on startup
             theme = data.get("theme")
             if theme:
-                self.dark_mode = theme == "dark"
-                self._theme_name = theme
+                # Always start in light mode
+                self.dark_mode = False
+                self._theme_name = "light"
                 self._apply_styles()
-                print(f"[Persist] Theme set to: {theme}")
+                print(f"[Persist] Theme forced to: light (saved theme was: {theme})")
             # Restore messages for the current chat if available
             if self._current_chat_id:
                 for chat in self._chats:
@@ -948,7 +951,7 @@ class MainWindow(QMainWindow):
                         try:
                             # Apply rounded background to the whole row and temporarily remove button border
                             # Use a theme-aware hover color (black in dark mode, light gray in light mode)
-                            bg = "#222222" if getattr(self, 'dark_mode', False) else "#f3f4f6"
+                            bg = "#222222" if getattr(self, 'dark_mode', False) else "#f5f5f5"
                             wrap.setStyleSheet((wbs or "") + f"background-color: {bg}; border-radius: 12px;")
                             cbtn.setStyleSheet((cbs or "") + "background: transparent; border: none;")
                         except Exception:
@@ -1051,7 +1054,7 @@ class MainWindow(QMainWindow):
                     if self.dark_mode:
                         dlg.setStyleSheet("QDialog { background: #000000; color: #e8e8e8; }")
                     else:
-                        dlg.setStyleSheet("QDialog { background: #ffffff; color: #0f1724; }")
+                        dlg.setStyleSheet("QDialog { background: #f5f5f5; color: #0f1724; }")
                     v = QVBoxLayout(dlg)
                     v.setContentsMargins(24, 20, 24, 18)
                     v.setSpacing(12)
@@ -2133,7 +2136,7 @@ class MainWindow(QMainWindow):
             btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             is_dark = self.dark_mode if hasattr(self, 'dark_mode') else False
             text_color = "#ffffff" if is_dark else "#000000"
-            hover_bg = "#222222" if is_dark else "#f4f6f8"
+            hover_bg = "#222222" if is_dark else "#f5f5f5"
             style = f"""
                 QPushButton#drawer-action {{
                     background-color: {bg_color or 'transparent'};
@@ -2562,6 +2565,45 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
+    def _handle_login_from_logout(self) -> None:
+        """Handle login after user logged out - similar to _start_login_flow but for post-logout scenario."""
+        try:
+            from backend.oauth_desktop import start_oauth_flow, get_stored_user
+            start_oauth_flow()
+            user = get_stored_user()
+            if user:
+                self.profile_uid = user.get("uid")
+                self.profile_display_name = user.get("name") or "사용자"
+                self.profile_plan = user.get("tier") or "Free"
+                self.profile_avatar_url = user.get("photo_url")
+                self.profile_handle = user.get("handle") or user.get("email", "").split("@")[0] or ""
+                # Update UI
+                try:
+                    self._refresh_profile_ui()
+                except Exception:
+                    pass
+                try:
+                    self._ensure_runtime_initialized()
+                except Exception:
+                    pass
+                try:
+                    self._apply_auth_state()
+                except Exception:
+                    pass
+                try:
+                    from pathlib import Path
+                    assets_dir = Path(__file__).resolve().parents[1] / "public" / "img"
+                    icon_file = assets_dir / ("profile-dark.svg" if self.dark_mode else "profile-light.svg")
+                    try:
+                        msg = _create_styled_dialog(self, "로그인", "로그인 완료되었습니다.", min_width=420, dark_mode=self.dark_mode, icon_path=str(icon_file) if icon_file.exists() else None)
+                        msg.exec()
+                    except Exception:
+                        QMessageBox.information(self, "로그인", "로그인 완료되었습니다.")
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"[OAuth] Post-logout login failed: {e}")
+
     def _refresh_profile_ui(self) -> None:
         """Refresh UI elements that display profile info (drawer name/avatar)."""
         try:
@@ -2911,7 +2953,7 @@ class MainWindow(QMainWindow):
             app.setStyleSheet(theme_qss)
         # Adaptive overrides depending on theme
         if not self.dark_mode:
-            override = "\nQWidget#main-area { background-color: #ffffff; color: #000000; }\nQWidget#central { background-color: #ffffff; color: #000000; }\nQMainWindow { background-color: #ffffff; color: #000000; }\n"
+            override = "\nQWidget#main-area { background-color: #f5f5f5; color: #000000; }\nQWidget#central { background-color: #f5f5f5; color: #000000; }\nQMainWindow { background-color: #f5f5f5; color: #000000; }\n"
             # Drawer-specific overrides + overlay dim for modal feeling
             override += "\nQFrame#drawer { background-color: transparent; border-left: none; color: #000000; }\nQWidget#drawer-profile { padding: 8px; }\nQWidget#drawer-overlay { background: rgba(0,0,0,0.14); }\n"
             # Ensure basic widgets inherit black text by default in simplified layout
@@ -2966,7 +3008,7 @@ class MainWindow(QMainWindow):
             if hasattr(self, "script_container") and isinstance(self.script_container, QWidget):
                 try:
                     # Use a light gray background in light theme to match previous appearance
-                    sc_bg = "#f4f6f8" if not self.dark_mode else "#0f1724"
+                    sc_bg = "#f5f5f5" if not self.dark_mode else "#2a2a2a"
                     sc_border = "#e5e7eb" if not self.dark_mode else "#374151"
                     self.script_container.setStyleSheet(
                         f"QFrame#composer-pill, QWidget#script-input-container {{ background: {sc_bg}; border: 1px solid {sc_border}; border-radius: 20px; }}")
@@ -3096,9 +3138,9 @@ class MainWindow(QMainWindow):
             try:
                 if hasattr(self, "script_container"):
                     if mobile:
-                        self.script_container.setStyleSheet("QWidget#script-input-container { background: #ffffff; border: 1px solid #e5e7eb; border-radius: 24px; padding: 14px; }")
+                        self.script_container.setStyleSheet("QWidget#script-input-container { background: #f5f5f5; border: 1px solid #e5e7eb; border-radius: 24px; padding: 14px; }")
                     else:
-                        self.script_container.setStyleSheet("QWidget#script-input-container { background: #f3f4f6; border: 1px solid #e5e7eb; border-radius: 20px; padding: 12px; }")
+                        self.script_container.setStyleSheet("QWidget#script-input-container { background: #f5f5f5; border: 1px solid #e5e7eb; border-radius: 20px; padding: 12px; }")
             except Exception:
                 pass
 
@@ -3211,7 +3253,7 @@ class MainWindow(QMainWindow):
         else:
             bg = "#f4f4f5"          # same as light composer background
             border = "#e5e7eb"      # same as light composer border
-            hover_bg = "#ececf1"
+            hover_bg = "#f5f5f5"
             hover_border = "#d1d5db"
             press_bg = "#e5e7eb"
             press_border = "#cbd5e1"
@@ -3439,7 +3481,7 @@ class MainWindow(QMainWindow):
         try:
             if hasattr(self, 'drawer_new_chat_btn') and hasattr(self, 'drawer_search_btn'):
                 text_color = "#ffffff" if self.dark_mode else "#000000"
-                hover_bg = "#222222" if self.dark_mode else "#f4f6f8"
+                hover_bg = "#222222" if self.dark_mode else "#f5f5f5"
                 
                 style = f"""
                     QPushButton#drawer-action {{
@@ -4001,11 +4043,11 @@ class MainWindow(QMainWindow):
                 desc_color = "#9ca3af"
                 hover_bg = "#111111"
             else:
-                menu_bg = "#ffffff"
+                menu_bg = "#f5f5f5"
                 menu_border = "#e5e7eb"
                 name_color = "#0f1724"
                 desc_color = "#6b7280"
-                hover_bg = "#f3f4f6"
+                hover_bg = "#ebebeb"
 
             # Ensure the menu paints a solid background (important with QWidgetAction rows).
             try:
@@ -4058,7 +4100,8 @@ class MainWindow(QMainWindow):
                 # Highlight selected model row with background color (compare display name)
                 current_display = getattr(self, "_current_model_display", None)
                 if current_display == m:
-                    row.setStyleSheet("background-color: #f6f7f9; border-radius: 6px; border: none;")
+                    selected_bg = "#404040" if getattr(self, "dark_mode", False) else "#ebebeb"
+                    row.setStyleSheet(f"background-color: {selected_bg}; border-radius: 6px; border: none;")
                 else:
                     row.setStyleSheet("")
 
@@ -4222,7 +4265,7 @@ class MainWindow(QMainWindow):
             if self.dark_mode:
                 popup.setStyleSheet("background: #111111; color: #ffffff; border: none; border-radius:10px;")
             else:
-                popup.setStyleSheet("background: #ffffff; color: #0f1724; border: none; border-radius:10px;")
+                popup.setStyleSheet("background: #f5f5f5; color: #0f1724; border: none; border-radius:10px;")
         except Exception:
             pass
         # subtle shadow for depth
@@ -4521,13 +4564,13 @@ class MainWindow(QMainWindow):
         # Upgrade (opens billing/upgrade page)
         def _open_upgrade():
             try:
-                QDesktopServices.openUrl(QUrl('http://localhost:3000/profile?tab=subscription'))
+                QDesktopServices.openUrl(QUrl('https://nova-ai.work/profile?tab=subscription'))
             except Exception:
                 pass
 
         def _open_profile():
             try:
-                QDesktopServices.openUrl(QUrl('http://localhost:3000/profile'))
+                QDesktopServices.openUrl(QUrl('https://nova-ai.work/profile'))
             except Exception:
                 pass
 
@@ -4687,6 +4730,14 @@ class MainWindow(QMainWindow):
                     QMessageBox.information(self, "로그아웃", "성공적으로 로그아웃되었습니다.")
                 except Exception:
                     pass
+            
+            # Show login window after logout
+            try:
+                from gui.login_window import LoginWindow
+                login_win = LoginWindow(on_login=lambda: self._handle_login_from_logout())
+                login_win.exec()
+            except Exception as e:
+                print(f"[MainWindow] Failed to show login window: {e}")
         else:
             try:
                 QMessageBox.warning(self, "로그아웃 실패", "로그아웃에 실패했습니다. 다시 시도해주세요.")
@@ -6612,7 +6663,7 @@ class MainWindow(QMainWindow):
         else:
             menu.setStyleSheet("""
                 QMenu {
-                    background-color: #ffffff;
+                    background-color: #f5f5f5;
                     border: 1px solid #d1d5db;
                     border-radius: 8px;
                     padding: 8px;
@@ -7212,7 +7263,7 @@ class MainWindow(QMainWindow):
             else:
                 msg.setStyleSheet("""
                     QMessageBox {
-                        background-color: #ffffff;
+                        background-color: #f5f5f5;
                     }
                     QPushButton {
                         background-color: #f0f0f0;
@@ -7355,7 +7406,7 @@ class MainWindow(QMainWindow):
             if self.dark_mode:
                 dlg.setStyleSheet("QDialog { background: #000000; color: #e8e8e8; }")
             else:
-                dlg.setStyleSheet("QDialog { background: #ffffff; color: #0f1724; }")
+                dlg.setStyleSheet("QDialog { background: #f5f5f5; color: #0f1724; }")
 
             v = QVBoxLayout(dlg)
             v.setContentsMargins(24, 20, 24, 18)

@@ -52,7 +52,7 @@ def start_oauth_flow():
     server_thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     server_thread.start()
     # Open browser to login page with redirect_uri
-    login_url = f"http://localhost:3000/login?redirect_uri=http://localhost:{CALLBACK_PORT}{CALLBACK_PATH}"
+    login_url = f"https://nova-ai.work/login?redirect_uri=http://localhost:{CALLBACK_PORT}{CALLBACK_PATH}"
     webbrowser.open(login_url)
     print(f"Opened browser for login: {login_url}")
     print("Waiting for login callback (timeout: %ds)..." % CALLBACK_TIMEOUT)

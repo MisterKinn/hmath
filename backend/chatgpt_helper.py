@@ -5,8 +5,9 @@ from __future__ import annotations
 import os
 import time
 import base64
+import hashlib
 from pathlib import Path
-from typing import Optional, Callable
+from typing import Optional, Callable, Generator
 
 try:
     from dotenv import load_dotenv  # type: ignore[import]
@@ -29,6 +30,9 @@ class ChatGPTHelper:
         Args:
             api_key: OpenAI API key. If not provided, will try to get from OPENAI_API_KEY env var or .env file.
         """
+        # Response cache (in-memory LRU-style cache)
+        self._cache: dict[str, str] = {}
+        self._cache_max_size = 100
         # Load .env file from project root (2 levels up from this file)
         if load_dotenv is not None:
             env_path = Path(__file__).resolve().parents[1] / ".env"
@@ -65,6 +69,23 @@ class ChatGPTHelper:
     def is_available(self) -> bool:
         """Check if ChatGPT is available."""
         return self.client is not None and self.api_key is not None
+
+    def _get_cache_key(self, prompt: str, model: str = "gpt-5-nano") -> str:
+        """Generate cache key from prompt and model."""
+        combined = f"{model}:{prompt}"
+        return hashlib.md5(combined.encode('utf-8')).hexdigest()
+
+    def _get_cached(self, cache_key: str) -> Optional[str]:
+        """Get cached response if available."""
+        return self._cache.get(cache_key)
+
+    def _set_cached(self, cache_key: str, response: str) -> None:
+        """Store response in cache with LRU eviction."""
+        if len(self._cache) >= self._cache_max_size:
+            # Remove oldest entry (first item)
+            oldest_key = next(iter(self._cache))
+            del self._cache[oldest_key]
+        self._cache[cache_key] = response
 
     def _encode_image_to_base64(self, image_path: str) -> Optional[str]:
         """Encode image file to base64 string.
@@ -131,6 +152,14 @@ class ChatGPTHelper:
             print("[ChatGPT] ERROR: No client available")
             return None
         
+        # Check cache first (only for non-image requests)
+        if not image_base64:
+            cache_key = self._get_cache_key(full_prompt, model)
+            cached = self._get_cached(cache_key)
+            if cached:
+                print(f"[ChatGPT] Cache hit! Returning cached response ({len(cached)} chars)")
+                return cached
+        
         for attempt in range(max_retries):
             try:
                 print(f"[ChatGPT] API call attempt {attempt + 1}/{max_retries}...")
@@ -170,28 +199,35 @@ class ChatGPTHelper:
                     response = self.client.chat.completions.create(  # type: ignore[union-attr]
                     model=model,
                         messages=messages,
-                        max_tokens=2000
+                        max_tokens=1200,
+                        stream=True
                     )
                     
-                    if response.choices and len(response.choices) > 0:
-                        result = response.choices[0].message.content
-                        if result:
-                            print(f"[ChatGPT] Vision API returned {len(result)} characters")
-                            return result
-                        else:
-                            print("[ChatGPT] WARNING: Vision API returned empty content")
-                            return None
+                    # Handle streaming response
+                    result = ""
+                    for chunk in response:
+                        if chunk.choices and len(chunk.choices) > 0:
+                            delta = chunk.choices[0].delta
+                            if hasattr(delta, 'content') and delta.content:
+                                result += delta.content
+                    
+                    if result:
+                        print(f"[ChatGPT] Vision API returned {len(result)} characters")
+                        # Don't cache image-based responses (they're typically unique)
+                        return result
                     else:
-                        print("[ChatGPT] WARNING: No choices in response")
+                        print("[ChatGPT] WARNING: Vision API returned empty content")
                         return None
                 else:
                     # Regular text-only request
+                    cache_key = self._get_cache_key(full_prompt, model)
                     try:
                         response = self.client.responses.create(model="gpt-5-nano", input=full_prompt)
                         if hasattr(response, 'output_text'):
                             result = response.output_text
                             if result:
                                 print(f"[ChatGPT] API returned {len(result)} characters")
+                                self._set_cached(cache_key, result)
                                 return result
                             else:
                                 print("[ChatGPT] WARNING: API returned empty output_text")
@@ -201,15 +237,23 @@ class ChatGPTHelper:
                             return None
                     except AttributeError:
                         print("[ChatGPT] Falling back to chat.completions.create")
-                        response = self.client.chat.completions.create(model="gpt-5-nano", messages=[{"role": "user", "content": full_prompt}], max_tokens=2000)
-                        if response.choices and len(response.choices) > 0:
-                            result = response.choices[0].message.content
-                            if result:
-                                print(f"[ChatGPT] Chat API returned {len(result)} characters")
-                                return result
+                        response = self.client.chat.completions.create(model="gpt-5-nano", messages=[{"role": "user", "content": full_prompt}], max_tokens=1200, stream=True)
+                        
+                        # Handle streaming response
+                        result = ""
+                        for chunk in response:
+                            if chunk.choices and len(chunk.choices) > 0:
+                                delta = chunk.choices[0].delta
+                                if hasattr(delta, 'content') and delta.content:
+                                    result += delta.content
+                        
+                        if result:
+                            print(f"[ChatGPT] Chat API returned {len(result)} characters")
+                            self._set_cached(cache_key, result)
+                            return result
                         else:
-                            print("[ChatGPT] WARNING: No choices in chat response")
-                        return None
+                            print("[ChatGPT] WARNING: No content in streamed chat response")
+                            return None
                     
             except Exception as e:
                 error_name = type(e).__name__
