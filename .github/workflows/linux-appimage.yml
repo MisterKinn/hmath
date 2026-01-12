@@ -30,20 +30,6 @@ jobs:
         python -m pip install --upgrade pip
         python -m pip install -r requirements.txt pyinstaller Pillow
 
-    - name: Run debug build (capture logs)
-      run: |
-        set -o pipefail
-        bash -x scripts/build_linux.sh 2>&1 | tee build_debug.log || true
-      env:
-        DEBUG_BUILD: 1
-
-    - name: Upload debug log
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: build-debug-log
-        path: build_debug.log
-
     - name: Build AppImage
       run: bash scripts/build_linux.sh
 
@@ -52,3 +38,43 @@ jobs:
       with:
         name: appimages
         path: "*.AppImage"
+
+  debug-dist:
+    # Manual debug job to run PyInstaller only and upload the dist directory for inspection
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y wget
+
+    - name: Install Python deps
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install -r requirements.txt pyinstaller Pillow
+
+    - name: Run PyInstaller (debug)
+      run: |
+        set -x
+        python -m PyInstaller --noconfirm --log-level=DEBUG packaging/Formulite-linux.spec
+        set +x
+
+    - name: List dist contents
+      run: |
+        ls -la dist || true
+        if [ -d dist/Formulite ]; then ls -la dist/Formulite || true; fi
+
+    - name: Upload dist artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: dist-debug
+        path: dist
